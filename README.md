@@ -21,4 +21,20 @@ git clone https://github.com/iagos-dc/atmo-access-data-access.git
 cd atmo-access-data-access
 ```
 
-TBD
+### Install the package
+
+```sh
+python -m pip install .
+```
+
+### Install the package in the development mode
+
+```sh
+python -m pip install --editable .
+```
+
+### Test your installation
+
+```sh
+python atmoaccess_data_access/query_iagos.py
+```
