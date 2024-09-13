@@ -191,6 +191,6 @@ def read_dataset(variables_list=None):
 if __name__ == "__main__":
     #print(query_datasets_stations(['x0z5']))
     print('Read dataset function')
-    print(read_dataset(variables_list=['aerosol particle number size distribution	']))
+    print(read_dataset(variables_list=['aerosol particle number size distribution']))
     print('End read dataset function')
 
