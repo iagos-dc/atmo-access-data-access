@@ -5,7 +5,7 @@ from requests.exceptions import HTTPError
 import pandas as pd
 import xarray as xr
 
-REST_URL_PATH = "https://prod-actris-md.nilu.no/"
+REST_URL_PATH = "https://dev-actris-md2.nilu.no/"
 REST_URL_STATIONS = REST_URL_PATH + "facilities"
 REST_URL_VARIABLES = REST_URL_PATH + "vocabulary/contentattribute"
 REST_URL_DOWNLOAD = REST_URL_PATH + "metadata/"
@@ -51,7 +51,7 @@ def get_list_platforms():
                             'latitude': facility['lat'],
                             'longitude': facility['lon'],
                             'long_name': facility['name'],
-                            'URI': 'https://prod-actris-md.nilu.no/facilities/{0}'.format(facility['identifier']),
+                            'URI': '{0}/facilities/{1}'.format(REST_URL_PATH, facility['identifier']),
                             'altitude': facility['alt']})
                 else:
                     pass
