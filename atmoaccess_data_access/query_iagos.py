@@ -197,6 +197,8 @@ def read_dataset(dataset_id, variables_list=None):
         response.raise_for_status()
         with io.BytesIO(response.content) as buf:
             with xr.open_dataset(buf, engine='h5netcdf') as ds:
+                _mean_vars = [v for v in ds if v.endswith('_mean')]
+                ds = ds[_mean_vars]
                 varlist = []
                 for varname, da in ds.data_vars.items():
                     if 'standard_name' not in da.attrs:
@@ -207,7 +209,8 @@ def read_dataset(dataset_id, variables_list=None):
                         if std_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
                             continue
                     varlist.append(varname)
-                return ds[varlist].load()
+                ds = ds[varlist].load()
+                return ds
     except Exception as e:
         raise RuntimeError(f'Reading the IAGOS dataset failed: {dataset_id}') from e
 
