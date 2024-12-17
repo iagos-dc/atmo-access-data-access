@@ -41,10 +41,11 @@ def get_list_platforms():
     # remove ecosystem and ocean for this demonstrator
     # but, stations would contain ALL stations from ICOS
     stations = stations[stations['theme'] == 'AS']
-
     # make projection and rename columns to conform
     col_dict = _colname()
     stations = stations[list(col_dict)].rename(columns=col_dict)
+    for col in ['latitude', 'longitude', 'altitude']:
+        stations[col] = pd.to_numeric(stations[col])
     # transform to desired output format
     stations = stations.to_dict(orient='records')
 
@@ -59,6 +60,7 @@ def _colname():
         'lat': 'latitude',
         'lon': 'longitude',
         'elevation': 'altitude',
+        'uri': 'URI',
     }
     return colname
 
