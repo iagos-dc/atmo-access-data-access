@@ -139,52 +139,76 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
             all_datasets
         )
 
-    return list(all_datasets)
+    all_ecv_dataset = []
 
-def read_dataset(variables_list=None):
+    for dataset in all_datasets:
+        title = dataset['md_identification']['title']
+        md_distribution_information = dataset['md_distribution_information']
+
+        dataset_urls = [
+            {'url': entry['dataset_url'], 'type': entry['protocol']}
+            for entry in md_distribution_information
+            if entry['protocol'] in ['OPeNDAP', 'HTTP']
+        ]
+        
+        print(dataset_urls)
+
+        attribute_descriptions = dataset['md_content_information']['attribute_descriptions']
+        
+        mapped_ecvs = []
+        for attribute in attribute_descriptions:
+            try:
+                ecv_names = MAPPING_ACTRIS_ECV[attribute]
+                mapped_ecvs.extend(ecv_names)
+            except KeyError:
+                pass
+        
+        # Make the list unique
+        mapped_ecvs = list(set(mapped_ecvs))
+        
+        platform_id = code
+
+        time_period = [dataset['ex_temporal_extent']['time_period_begin'], dataset['ex_temporal_extent']['time_period_end']]
+
+        if mapped_ecvs:
+                
+            ecv_dataset = {'title': title, 'urls': dataset_urls, 'layers': None, 'ecv_variables': mapped_ecvs, 'time_period': time_period, 'platform_id': platform_id}
+            all_ecv_dataset.append(ecv_dataset)
+
+        else:
+            pass 
+
+    return list(all_ecv_dataset)
+
+def read_dataset(dataset_id, variables_list=None):
     """
     Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
     :param dataset_id: str; an identifier (e.g. an url) of the dataset to retrieve
     :param variables_list: list of str, optional; a list of ECV names
-    :return: list of dataset URLs
+    :return: xarray.Dataset object
     """
-
-    all_datasets = []
-
-    for variable in variables_list:
-        page = 0
-        while True:
-            try:
-                url = f"{REST_URL_PATH}metadata/content/{variable}/page/{page}"
-                response = requests.get(url)
-                response.raise_for_status()
-                datasets = response.json()
-                
-                if not datasets:
-                    break
-
-                all_datasets.extend(datasets)
-                page += 1
-            except HTTPError as http_err:
-                warnings.warn(f'HTTP error occurred while querying ACTRIS datasets for variable={variable}, page={page}: {http_err}')
-                raise
-            except Exception as err:
-                warnings.warn(f'Other error occurred while querying ACTRIS datasets for variable={variable}, page={page}: {err}')
-                raise
-
-    dataset_urls = []
-    for dataset in all_datasets:
-        md_distribution_information = dataset.get('md_distribution_information', [])
-        for info in md_distribution_information:
-            dataset_url = info.get('dataset_url')
-            if dataset_url:
-                dataset_urls.append(dataset_url)
-
-    return dataset_urls
-
+    variables_set = set(variables_list) if variables_list is not None else None
+    try:
+        with xr.open_dataset(dataset_id) as ds:
+            varlist = []
+            for varname, da in ds.data_vars.items():
+                if 'standard_name' not in da.attrs:
+                    continue
+                if variables_set is not None:
+                    std_name = da.attrs['standard_name']
+                    ecv_names = MAPPING_ACTRIS_ECV.get(std_name, [])
+                    if std_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
+                        continue
+                varlist.append(varname)
+            return ds[varlist].load()
+    except Exception as e:
+        raise RuntimeError(f'Reading the ACTRIS dataset failed: {dataset_id}') from e
 
 if __name__ == "__main__":
-    #print(query_datasets_stations(['x0z5']))
-    print('Read dataset function')
-    print(read_dataset(variables_list=['aerosol particle number size distribution']))
-    print('End read dataset function')
+    #print(get_list_platforms())
+    #print(query_datasets_stations(['w2kl']))
+    #print('Read dataset function')
+    dataset_id = "https://thredds.nilu.no/thredds/dodsC/ebas_doi/SM/XF/DX/SMXF-DXYP.nc"
+    print(read_dataset(dataset_id))
+    #print(read_dataset(dataset_id, variables_list=['aerosol particle number size distribution']))
+    #print('End read dataset function')
