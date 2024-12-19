@@ -5,7 +5,7 @@ from requests.exceptions import HTTPError
 import pandas as pd
 import xarray as xr
 
-REST_URL_PATH = "https://dev-actris-md2.nilu.no/"
+REST_URL_PATH = "https://prod-actris-md2.nilu.no/"
 REST_URL_STATIONS = REST_URL_PATH + "facilities"
 REST_URL_VARIABLES = REST_URL_PATH + "vocabulary/contentattribute"
 REST_URL_DOWNLOAD = REST_URL_PATH + "metadata/"
@@ -100,11 +100,6 @@ def get_list_variables():
 def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
     """
     Query the ACTRIS database for metadata of datasets satisfying the specified criteria.
-    :param codes: a list of ACTRIS facility identifiers (short_name); selects datasets with the correct facility identifier in the list
-    :param variables_list: optional; a list of ECV names; selects datasets with ecv_variables not disjoint with the list
-    :param temporal_extent: optional; a list/tuple of the form (start_date, end_date); start_date and end_date
-    must be parsable with pandas.to_datetime; selects datasets with time_period overlapping temporal_extent intevral
-    :return: a list of dict with the keys:
     """
     all_datasets = []
 
@@ -129,19 +124,19 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
                 warnings.warn(f'Other error occurred while querying ACTRIS datasets for station={code}, page={page}: {err}')
                 raise
 
-    if variables_list is not None:
-        _variables = set(variables_list)
-        all_datasets = filter(lambda ds: not _variables.isdisjoint(ds['ecv_variables']), all_datasets)
-    if temporal_extent is not None:
-        t0, t1 = map(pd.to_datetime, temporal_extent)
-        all_datasets = filter(
-            lambda ds: not (pd.to_datetime(ds['time_period'][0]) > t1 or pd.to_datetime(ds['time_period'][1]) < t0),
-            all_datasets
-        )
-
     all_ecv_dataset = []
 
     for dataset in all_datasets:
+        if variables_list is not None:
+            _variables = set(variables_list)
+            if _variables.isdisjoint(dataset['ecv_variables']):
+                continue
+
+        if temporal_extent is not None:
+            t0, t1 = map(pd.to_datetime, temporal_extent)
+            if pd.to_datetime(dataset['time_period'][0]) > t1 or pd.to_datetime(dataset['time_period'][1]) < t0:
+                continue
+
         title = dataset['md_identification']['title']
         md_distribution_information = dataset['md_distribution_information']
 
@@ -150,8 +145,6 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
             for entry in md_distribution_information
             if entry['protocol'] in ['OPeNDAP', 'HTTP']
         ]
-        
-        print(dataset_urls)
 
         attribute_descriptions = dataset['md_content_information']['attribute_descriptions']
         
@@ -171,12 +164,8 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
         time_period = [dataset['ex_temporal_extent']['time_period_begin'], dataset['ex_temporal_extent']['time_period_end']]
 
         if mapped_ecvs:
-                
             ecv_dataset = {'title': title, 'urls': dataset_urls, 'layers': None, 'ecv_variables': mapped_ecvs, 'time_period': time_period, 'platform_id': platform_id}
             all_ecv_dataset.append(ecv_dataset)
-
-        else:
-            pass 
 
     return list(all_ecv_dataset)
 
@@ -192,12 +181,13 @@ def read_dataset(dataset_id, variables_list=None):
         with xr.open_dataset(dataset_id) as ds:
             varlist = []
             for varname, da in ds.data_vars.items():
-                if 'standard_name' not in da.attrs:
+                if 'ebas_component' not in da.attrs:
                     continue
                 if variables_set is not None:
-                    std_name = da.attrs['standard_name']
-                    ecv_names = MAPPING_ACTRIS_ECV.get(std_name, [])
-                    if std_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
+                    
+                    ebas_name = da.attrs['ebas_component']
+                    ecv_names = MAPPING_ACTRIS_ECV.get(ebas_name, [])
+                    if ebas_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
                         continue
                 varlist.append(varname)
             return ds[varlist].load()
@@ -206,7 +196,8 @@ def read_dataset(dataset_id, variables_list=None):
 
 if __name__ == "__main__":
     #print(get_list_platforms())
-    #print(query_datasets_stations(['w2kl']))
+    #print(query_datasets_stations(['5qss']))
+    print(query_datasets_stations(['w2kl']))
     #print('Read dataset function')
     dataset_id = "https://thredds.nilu.no/thredds/dodsC/ebas_doi/SM/XF/DX/SMXF-DXYP.nc"
     print(read_dataset(dataset_id))
