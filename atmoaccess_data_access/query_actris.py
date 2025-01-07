@@ -97,18 +97,18 @@ def get_list_variables():
         warnings.warn(f'Other error occurred: {err}')
         raise
 
+
 def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
     """
     Query the ACTRIS database for metadata of datasets satisfying the specified criteria.
     """
+    if variables_list is None:
+        variables_list = list(MAPPING_ECV_ACTRIS)
+    variables_to_query = [var for variable in variables_list for var in MAPPING_ECV_ACTRIS[variable]]
+    print(variables_to_query)
     all_datasets = []
 
     for code in codes:
-        if variables_list is not None:
-            variables_to_query = variables_list
-        else:
-            variables_to_query = [var for sublist in MAPPING_ECV_ACTRIS.values() for var in sublist]
-        
         for variable in variables_to_query:
             page = 0
             while True:
@@ -117,10 +117,10 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
                     response = requests.get(url)
                     response.raise_for_status()
                     datasets = response.json()
-                    
+
                     if not datasets:
                         break
-    
+
                     all_datasets.extend(datasets)
                     page += 1
                 except HTTPError as http_err:
@@ -133,14 +133,11 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
     all_ecv_dataset = []
 
     for dataset in all_datasets:
-        if variables_list is not None:
-            _variables = set(variables_list)
-            if _variables.isdisjoint(dataset['ecv_variables']):
-                continue
+        time_period = [dataset['ex_temporal_extent']['time_period_begin'], dataset['ex_temporal_extent']['time_period_end']]
 
         if temporal_extent is not None:
             t0, t1 = map(pd.to_datetime, temporal_extent)
-            if pd.to_datetime(dataset['time_period'][0]) > t1 or pd.to_datetime(dataset['time_period'][1]) < t0:
+            if pd.to_datetime(time_period[0]) > t1 or pd.to_datetime(time_period[1]) < t0:
                 continue
 
         title = dataset['md_identification']['title']
@@ -153,7 +150,7 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
         ]
 
         attribute_descriptions = dataset['md_content_information']['attribute_descriptions']
-        
+
         mapped_ecvs = []
         for attribute in attribute_descriptions:
             try:
@@ -161,19 +158,18 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
                 mapped_ecvs.extend(ecv_names)
             except KeyError:
                 pass
-        
+
         # Make the list unique
         mapped_ecvs = list(set(mapped_ecvs))
-        
-        platform_id = code
 
-        time_period = [dataset['ex_temporal_extent']['time_period_begin'], dataset['ex_temporal_extent']['time_period_end']]
+        platform_id = dataset['md_data_identification']['facility']['identifier']
 
         if mapped_ecvs:
             ecv_dataset = {'title': title, 'urls': dataset_urls, 'layers': None, 'ecv_variables': mapped_ecvs, 'time_period': time_period, 'platform_id': platform_id}
             all_ecv_dataset.append(ecv_dataset)
 
     return list(all_ecv_dataset)
+
 
 def read_dataset(dataset_id, variables_list=None):
     """
@@ -190,7 +186,6 @@ def read_dataset(dataset_id, variables_list=None):
                 if 'ebas_component' not in da.attrs:
                     continue
                 if variables_set is not None:
-                    
                     ebas_name = da.attrs['ebas_component']
                     ecv_names = MAPPING_ACTRIS_ECV.get(ebas_name, [])
                     if ebas_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
@@ -199,6 +194,7 @@ def read_dataset(dataset_id, variables_list=None):
             return ds[varlist].load()
     except Exception as e:
         raise RuntimeError(f'Reading the ACTRIS dataset failed: {dataset_id}') from e
+
 
 if __name__ == "__main__":
     #print(get_list_platforms())
