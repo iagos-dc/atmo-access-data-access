@@ -10,9 +10,24 @@ REST_URL_STATIONS = REST_URL_PATH + "facilities"
 REST_URL_VARIABLES = REST_URL_PATH + "vocabulary/contentattribute"
 REST_URL_DOWNLOAD = REST_URL_PATH + "metadata/"
 
-STATIC_PARAMETERS = ["latitude", "longitude", "air_pressure", "barometric_altitude"]
+STATIC_PARAMETERS = ["latitude", "longitude", "air_pressure", "barometric_altitude", "pressure", "relative_humidity", "temperature"]
 
-MAPPING_ECV_ACTRIS = {'Aerosol Optical Properties': ['aerosol particle light absorption coefficient', 'aerosol particle light hemispheric backscatter coefficient', 'aerosol particle light scattering coefficient', 'aerosol particle optical depth'], 'Aerosol Chemical Properties': ['aerosol particle elemental carbon mass concentration', 'aerosol particle organic carbon mass concentration'], 'Aerosol Physical Properties': ['aerosol particle number concentration', 'cloud condensation nuclei number concentration', 'aerosol particle nano number concentration', 'aerosol particle fine-mode number concentration', 'aerosol particle number size distribution', 'cloud condensation nuclei number size distribution', 'aerosol particle fine-mode number size distribution', 'aerosol particle nano number size distribution', 'naturally negatively charged nano aerosol particle number size distribution', 'naturally positively charged nano aerosol particle number size distribution', 'aerosol particle volatile number size distribution', 'aerosol particle non-volatile number size distribution'], 'NO2': ['nitrogen dioxide amount fraction', 'nitrogen dioxide mass concentration', 'nitrogen dioxide number concentration']}
+MAPPING_ECV_ACTRIS = {'Aerosol Optical Properties': ['aerosol particle light absorption coefficient', 'aerosol particle light hemispheric backscatter coefficient', 'aerosol particle light scattering coefficient', 'aerosol particle optical depth'], 'Aerosol Chemical Properties': ['aerosol particle elemental carbon mass concentration', 'aerosol particle organic carbon mass concentration'], 'Aerosol Physical Properties': ['aerosol particle number concentration', 'cloud condensation nuclei number concentration', 'aerosol particle number size distribution', 'cloud condensation nuclei number size distribution'], 'NO2': ['nitrogen dioxide amount fraction', 'nitrogen dioxide mass concentration']}
+
+MAPPING_ACTRIS_EBAS = {
+    'aerosol_light_backscattering_coefficient': 'aerosol particle light hemispheric backscatter coefficient',
+    'aerosol_light_scattering_coefficient': 'aerosol particle light scattering coefficient',
+    'aerosol_absorption_coefficient':'aerosol particle light absorption coefficient',
+    'aerosol_optical_depth':'aerosol particle optical depth',
+    'elemental_carbon':'aerosol particle elemental carbon mass concentration', 
+    'organic_carbon':'aerosol particle organic carbon mass concentration',
+    'particle_number_concentration':'aerosol particle number concentration',
+    'cloud_condensation_nuclei_number_concentration':'cloud condensation nuclei number concentration',
+    'particle_number_size_distribution':'aerosol particle number size distribution',
+    'cloud_condensation_nuclei_number_size_distribution':'cloud condensation nuclei number size distribution',
+    'nitrogen_dioxide':'nitrogen dioxide amount fraction', 
+    'nitrogen_dioxide':'nitrogen dioxide mass concentration', 
+}
 
 def _reverse_mapping(mapping):
     ret = {}
@@ -97,7 +112,6 @@ def get_list_variables():
         warnings.warn(f'Other error occurred: {err}')
         raise
 
-
 def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
     """
     Query the ACTRIS database for metadata of datasets satisfying the specified criteria.
@@ -170,7 +184,6 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
 
     return list(all_ecv_dataset)
 
-
 def read_dataset(dataset_id, variables_list=None):
     """
     Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
@@ -179,29 +192,36 @@ def read_dataset(dataset_id, variables_list=None):
     :return: xarray.Dataset object
     """
     variables_set = set(variables_list) if variables_list is not None else None
+
     try:
         with xr.open_dataset(dataset_id) as ds:
             varlist = []
             for varname, da in ds.data_vars.items():
                 if 'ebas_component' not in da.attrs:
                     continue
-                if variables_set is not None:
+                if variables_set is not None:         
+
                     ebas_name = da.attrs['ebas_component']
-                    ecv_names = MAPPING_ACTRIS_ECV.get(ebas_name, [])
+
+                    if ebas_name in STATIC_PARAMETERS:
+                        continue
+
+                    actris_name = MAPPING_ACTRIS_EBAS[ebas_name]
+                    
+                    ecv_names = MAPPING_ACTRIS_ECV.get(actris_name, [])
+
                     if ebas_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
                         continue
+
+                
+                
                 varlist.append(varname)
             return ds[varlist].load()
     except Exception as e:
         raise RuntimeError(f'Reading the ACTRIS dataset failed: {dataset_id}') from e
 
-
 if __name__ == "__main__":
     #print(get_list_platforms())
-    print(query_datasets_stations(['5qss']))
-    #print(query_datasets_stations(['w2kl']))
-    #print('Read dataset function')
-    dataset_id = "https://thredds.nilu.no/thredds/dodsC/ebas_doi/25/7R/DX/257R-DXCZ.nc"
-    print(read_dataset(dataset_id))
-    #print(read_dataset(dataset_id, variables_list=['aerosol particle number size distribution']))
-    #print('End read dataset function')
+    #print(query_datasets_stations(['5qss']))
+    dataset_id = "https://thredds.nilu.no/thredds/dodsC/ebas_doi/T6/Q7/ZC/T6Q7-ZCQY.nc"
+    print(read_dataset(dataset_id, variables_list=['Aerosol Optical Properties']))
