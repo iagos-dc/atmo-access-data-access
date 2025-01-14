@@ -118,8 +118,10 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
     """
     if variables_list is None:
         variables_list = list(MAPPING_ECV_ACTRIS)
+    else:
+        variables_list = [var for var in variables_list if var in MAPPING_ECV_ACTRIS]
+
     variables_to_query = [var for variable in variables_list for var in MAPPING_ECV_ACTRIS[variable]]
-    print(variables_to_query)
     all_datasets = []
 
     for code in codes:
@@ -206,7 +208,7 @@ def read_dataset(dataset_id, variables_list=None):
                     if ebas_name in STATIC_PARAMETERS:
                         continue
 
-                    actris_name = MAPPING_ACTRIS_EBAS[ebas_name]
+                    actris_name = MAPPING_ACTRIS_EBAS.get(ebas_name)
                     
                     ecv_names = MAPPING_ACTRIS_ECV.get(actris_name, [])
 
