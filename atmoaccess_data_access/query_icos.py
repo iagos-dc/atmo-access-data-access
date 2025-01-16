@@ -200,15 +200,15 @@ def query_datasets(variables=[], temporal=[], spatial=[]):
     # make sure there are no duplicates
     selected_var = list(set(selected_var))
 
-    df = pd.DataFrame()
-
     # filter provided variables from all datasets
+    _dfs = []
     for v in selected_var:
         data = dataset[dataset['spec'] == __get_spec(v)]
-        df = df.append(data)
+        _dfs.append(data)
 
-    if df.empty:
+    if len(_dfs) == 0:
         return []
+    df = pd.concat(_dfs)
 
     # make sure there are no duplicates (meteo variables are in the same file)
     df = df.drop_duplicates(subset=['dobj'])
