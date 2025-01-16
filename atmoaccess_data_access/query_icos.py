@@ -184,7 +184,7 @@ def query_datasets(variables=[], temporal=[], spatial=[]):
     dtype = dict(zip(stn.columns.tolist(), dtypes))
     # get all datasets and convert dtype
     dataset = __sparql_data()
-    dtypes = ['str', 'str', 'str', 'str', 'int', 'datetime64', 'datetime64', 'datetime64']
+    dtypes = ['str', 'str', 'str', 'str', 'int', 'datetime64[ns]', 'datetime64[ns]', 'datetime64[ns]']
     dtype = dict(zip(dataset.columns.tolist(), dtypes))
     dataset.astype(dtype)
 
