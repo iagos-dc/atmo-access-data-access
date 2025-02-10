@@ -11,7 +11,7 @@ import xarray as xr
 logger = logging.getLogger(__name__)
 
 
-ALLOW_READ_DATASET_VIA_HTTP = False  # indicates if the routine read_dataset can fallback to reading via http if reading via opendap failed
+ALLOW_READ_DATASET_VIA_HTTP = True  # indicates if the routine read_dataset can fallback to reading via http if reading via opendap failed
 _CACHE_EXPIRE_TIME = 3600 * 36  # cache expires in 36h
 
 REST_URL_PATH = "https://prod-actris-md2.nilu.no/"
@@ -287,6 +287,9 @@ def read_dataset(dataset_id, variables_list=None, get_ECV_only=False):
             raise ValueError(f'invalid dataset_id; should be an url or a list of dict with keys "url" and "type"; got dataset_id={dataset_id}') from e
 
     def filter_ds_vars(ds):
+        # remove all trivial, single-coordinate dimensions
+        ds = ds.squeeze(drop=True)
+
         # remove all variables having dimension(s) other than 'time'
         dims_other_than_time = [d for d in ds.dims if d != 'time']
         if dims_other_than_time:
