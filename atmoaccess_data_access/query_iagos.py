@@ -18,9 +18,9 @@ MAPPING_ECV_IAGOS = {
     "Temperature (near surface)": ["air_temperature"],
     "Water Vapour (surface)": ["mole_fraction_of_water_vapor_in_air", "relative_humidity"],
     "Temperature (upper-air)": ["air_temperature"],
-    "Water Vapour (upper air)": ["mole_fraction_of_water_vapor_in_air, relative_humidity"],
+    "Water Vapour (upper air)": ["mole_fraction_of_water_vapor_in_air", "relative_humidity"],
     "Cloud Properties": ["number_concentration_of_cloud_liquid_water_particles_in_air"],
-    "Wind speed and direction (upper-air)": ["wind_speed, wind_from_direction"],
+    "Wind speed and direction (upper-air)": ["wind_speed", "wind_from_direction"],
     "Carbon Dioxide": ["mole_fraction_of_carbon_dioxide_in_air"],
     "Methane": ["mole_fraction_of_methane_in_air"],
     "Ozone": ["mole_fraction_of_ozone_in_air"],
@@ -190,7 +190,9 @@ def read_dataset(dataset_id, variables_list=None):
     :param variables_list: list of str, optional; a list of ECV names
     :return: xarray.Dataset object
     """
-    variables_set = set(variables_list) if variables_list is not None else None
+    if variables_list is None:
+        variables_list = list(MAPPING_ECV_IAGOS)
+    variables_set = set(variables_list)
     try:
         request_url = REST_URL_DOWNLOAD + "?fileId=" + dataset_id.replace("#", "%23")
         response = requests.get(request_url)
@@ -203,11 +205,10 @@ def read_dataset(dataset_id, variables_list=None):
                 for varname, da in ds.data_vars.items():
                     if 'standard_name' not in da.attrs:
                         continue
-                    if variables_set is not None:
-                        std_name = da.attrs['standard_name']
-                        ecv_names = MAPPING_IAGOS_ECV.get(std_name, [])
-                        if std_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
-                            continue
+                    std_name = da.attrs['standard_name']
+                    ecv_names = MAPPING_IAGOS_ECV.get(std_name, [])
+                    if std_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
+                        continue
                     varlist.append(varname)
                 ds = ds[varlist].load()
                 return ds
