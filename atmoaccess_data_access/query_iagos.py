@@ -28,6 +28,7 @@ MAPPING_ECV_IAGOS = {
     "NO2": ["mole_fraction_of_nitrogen_dioxide_in_air"]
 }
 
+# this is not used
 MAPPING_CF_IAGOS = {
     "air_temperature": "air_temp",
     "mole_fraction_of_water_vapor_in_air": "H2O_gas",
@@ -186,21 +187,30 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
 def read_dataset(dataset_id, variables_list=None):
     """
     Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
-    :param dataset_id: str; an identifier (e.g. an url) of the dataset to retrieve
+    :param dataset_id: list of dict with keys 'url', 'type', e.g.
+    [{'url': 'https://doi.org/10.25326/638#vp_daily_FRA.nc', 'type': 'LANDING_PAGE'}]
     :param variables_list: list of str, optional; a list of ECV names
-    :return: xarray.Dataset object
+    :return: xarray.Dataset object with at least one variable, otherwise returns None
     """
     if variables_list is None:
         variables_list = list(MAPPING_ECV_IAGOS)
     variables_set = set(variables_list)
     try:
-        request_url = REST_URL_DOWNLOAD + "?fileId=" + dataset_id.replace("#", "%23")
+        # retrieve an url of LANDING_PAGE type from dataset_id
+        url = None
+        for _url_info in dataset_id:
+            if _url_info['type'].upper() == 'LANDING_PAGE':
+                url = _url_info['url']
+                break
+        if url is None:
+            # when no url of LANDING_PAGE type found, take a first one and hope for the best...
+            url = dataset_id[0]['url']
+
+        request_url = REST_URL_DOWNLOAD + "?fileId=" + url.replace("#", "%23")
         response = requests.get(request_url)
         response.raise_for_status()
         with io.BytesIO(response.content) as buf:
             with xr.open_dataset(buf, engine='h5netcdf') as ds:
-                _mean_vars = [v for v in ds if v.endswith('_mean')]
-                ds = ds[_mean_vars]
                 varlist = []
                 for varname, da in ds.data_vars.items():
                     if 'standard_name' not in da.attrs:
@@ -210,8 +220,7 @@ def read_dataset(dataset_id, variables_list=None):
                     if std_name not in STATIC_PARAMETERS and variables_set.isdisjoint(ecv_names):
                         continue
                     varlist.append(varname)
-                ds = ds[varlist].load()
-                return ds
+                return ds[varlist].load() if varlist else None
     except Exception as e:
         raise RuntimeError(f'Reading the IAGOS dataset failed: {dataset_id}') from e
 
@@ -222,7 +231,5 @@ if __name__ == "__main__":
     print(get_list_variables())
     print(query_datasets_stations(['FRA', 'NAt']))
     for dataset in query_datasets_stations(['FRA', 'NAt']):
-        for url in dataset['urls']:
-            if url['type'] == "LANDING_PAGE":
-                array = read_dataset(url['url'], ['Carbon Monoxide', 'Ozone'])
-                print(array['CO_mean'])
+        ds = read_dataset(dataset['urls'], ['Carbon Monoxide', 'Ozone'])
+        print(ds)

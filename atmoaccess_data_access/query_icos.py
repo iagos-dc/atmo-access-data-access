@@ -10,6 +10,7 @@ https://gcos.wmo.int/en/essential-climate-variables/pressure/ecv-requirements
 https://gcos.wmo.int/en/essential-climate-variables/ghg/ecv-requirements
 '''
 
+import functools
 import pandas as pd
 import xarray as xr
 import warnings
@@ -94,12 +95,15 @@ def get_list_variables():
     return variables
 
 
+@functools.cache
 def ecv_icos_map():
-    reverse = []
+    rev_mapping = {}
     for var in get_list_variables():
-        reverse.append({v[0]: k for k, v in var.items()})
-
-    return reverse
+        variable_name = var['variable_name']
+        ECV_names = var['ECV_name']
+        for ECV_name in ECV_names:
+            rev_mapping.setdefault(ECV_name, []).append(variable_name)
+    return rev_mapping
 
 
 def __get_spec(variable_name):
@@ -250,7 +254,7 @@ def query_datasets(variables=[], temporal=[], spatial=[]):
     df['platform_id'] = ids
 
     outlist = []
-    import data_processing
+    import data_processing  # TODO: get rid of this "circular" dependency! implement internal caching, as for ACTRIS
     for r in df.iterrows():
         d = {
             'title': data_processing.GetICOSDatasetTitleRequest(r[1].dobj).compute(),  
@@ -298,13 +302,13 @@ def __sparql_data():
     return sparql
 
 
-def read_dataset(pid):
+def _read_dataset(pid):
     digital_object = Dobj(pid)
     # Get data & meta-data of the digital object.
     data_df, meta_data = digital_object.data, digital_object.info
     # In case of empty data or meta-data return an empty dataset.
     if data_df is None or meta_data is None:
-        return xr.Dataset()
+        return None
     # Initiate a dataset from the `data_df` dataframe.
     dataset = xr.Dataset.from_dataframe(data_df)
 
@@ -335,6 +339,52 @@ def read_dataset(pid):
         # attribute under the corresponding variable.
         dataset[variable_name] = dataset[variable_name].assign_attrs(attributes)
     return dataset
+
+
+def read_dataset(dataset_id, variables_list=None):
+    """
+    Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
+    :param dataset_id: list of dict with keys 'url', 'type', e.g.
+    [{'url': 'https://meta.icos-cp.eu/objects/ajg7CfaO7d1S_PT5IlHwS9SN', 'type': 'landing_page'}]
+    :param variables_list: list of str, optional; a list of ECV names
+    :return: xarray.Dataset object with at least one variable, otherwise returns None
+    """
+    ECV_to_icos = ecv_icos_map()
+    if variables_list is None:
+        variables_set = set(ECV_to_icos)
+    else:
+        variables_set = set(variables_list).intersection(ECV_to_icos)
+    icos_variables = set(sum((ECV_to_icos[v] for v in variables_set), start=[]))
+
+    try:
+        for url_type_dict in dataset_id:
+            pid = url_type_dict['url']
+            typ = url_type_dict['type']
+            if typ.lower() != 'landing_page':
+                continue
+            ds = _read_dataset(pid)
+            if ds is None:
+                # maybe the next url (if any) will work better...
+                continue
+
+            # re-index the dataset using 'TIMESTAMP' variable and rename it to 'time'
+            ds = ds.set_coords('TIMESTAMP')\
+                    .swap_dims({'index': 'TIMESTAMP'})\
+                    .reset_coords('index', drop=True)\
+                    .rename({'TIMESTAMP': 'time'})
+
+            # filter according to variables_list
+            vs = list(ds)
+            vs = [v for v in vs if v in icos_variables]
+            if not vs:
+                # maybe the next url (if any) will work better...
+                continue
+            ds = ds[vs]
+            return ds.load()
+
+    except Exception as e:
+        raise RuntimeError(f'Reading the ICOS dataset failed: {dataset_id}') from e
+    return None
 
 
 if __name__ == "__main__":

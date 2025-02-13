@@ -146,7 +146,7 @@ def _transform_dataset(dataset, variable):
         if entry['protocol'] in ['OPeNDAP', 'HTTP']
     ]
     ecvs = MAPPING_ACTRIS_ECV.get(variable, [])
-    ecvs_present = read_dataset(dataset_urls, variables_list=ecvs, get_ECV_only=True)
+    ecvs_present = _read_dataset(dataset_urls, variables_list=ecvs, get_ECV_only=True)
     if not ecvs_present:
         return None
     time_period = [dataset['ex_temporal_extent']['time_period_begin'], dataset['ex_temporal_extent']['time_period_end']]
@@ -228,8 +228,9 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
         variables_list = list(MAPPING_ECV_ACTRIS)
     else:
         variables_list = [var for var in variables_list if var in MAPPING_ECV_ACTRIS]
+    variables_set = set(variables_list)
 
-    variables_to_query = set(var for variable in variables_list for var in MAPPING_ECV_ACTRIS[variable])
+    variables_to_query = set(var for variable in variables_set for var in MAPPING_ECV_ACTRIS[variable])
     _all_datasets = []
 
     for code in codes:
@@ -237,54 +238,50 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
             _datasets = query_datasets_for_station_and_variable(code, variable)
             _all_datasets.extend(_datasets)
 
-    # remove duplicates and filter on temporal_extent, if needed
+    # remove duplicates, filter on temporal_extent (if required) and on ECV variables (i.e. variables_list)
     if temporal_extent is not None:
         t0, t1 = map(pd.to_datetime, temporal_extent)
     all_ids = set()
     filtered_datasets = []
     for dataset in _all_datasets:
+        # check if not a duplicate
         i = dataset['_id']
         if i in all_ids:
             continue
         all_ids.add(i)
+
+        # filter on temporal_extent, if required
         if temporal_extent is not None:
             time_period = dataset['time_period']
             if pd.to_datetime(time_period[0]) > t1 or pd.to_datetime(time_period[1]) < t0:
                 continue
+
+        # filter on ECV variables (i.e. variables_list)
+        if variables_set.isdisjoint(dataset['ecv_variables']):
+            continue
+
+        # all filters passed, so the dataset is OK
         del dataset['_id']
         filtered_datasets.append(dataset)
 
     return filtered_datasets
 
 
-def read_dataset(dataset_id, variables_list=None, get_ECV_only=False):
-    """
-    Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
-    :param dataset_id: str; an identifier (e.g. an url) of the dataset to retrieve
-    :param variables_list: list of str, optional; a list of ECV names
-    :return: xarray.Dataset object
-    """
+def _read_dataset(dataset_id, variables_list=None, get_ECV_only=False):
     if variables_list is None:
         variables_list = list(MAPPING_ECV_ACTRIS)
     variables_set = set(variables_list)
 
     url_opendap = None
     url_http = None
-    if isinstance(dataset_id, str):
-        url_opendap = dataset_id
-        url_http = dataset_id
-    else:
-        # dataset_id is a list like:
-        # [{'url': 'https://thredds.nilu.no/thredds/fileServer/ebas_doi/BT/VX/4A/BTVX-4AVV.nc','type': 'HTTP'},
-        # {'url': 'https://thredds.nilu.no/thredds/dodsC/ebas_doi/BT/VX/4A/BTVX-4AVV.nc', 'type': 'OPeNDAP'}]
-        try:
-            for url_dict in dataset_id:
-                if url_dict['type'] == 'OPeNDAP':
-                    url_opendap = url_dict['url']
-                elif url_dict['type'] == 'HTTP':
-                    url_http = url_dict['url']
-        except Exception as e:
-            raise ValueError(f'invalid dataset_id; should be an url or a list of dict with keys "url" and "type"; got dataset_id={dataset_id}') from e
+    try:
+        for url_dict in dataset_id:
+            if url_dict['type'] == 'OPeNDAP':
+                url_opendap = url_dict['url']
+            elif url_dict['type'] == 'HTTP':
+                url_http = url_dict['url']
+    except Exception as e:
+        raise ValueError(f'invalid dataset_id; should be an url or a list of dict with keys "url" and "type"; got dataset_id={dataset_id}') from e
 
     def filter_ds_vars(ds):
         # remove all trivial, single-coordinate dimensions
@@ -351,8 +348,24 @@ def read_dataset(dataset_id, variables_list=None, get_ECV_only=False):
         return ds_filtered
 
 
+def read_dataset(dataset_id, variables_list=None):
+    """
+    Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
+    :param dataset_id: list of dict with keys 'url', 'type', e.g.
+    [{'url': 'https://thredds.nilu.no/thredds/fileServer/ebas_doi/BT/VX/4A/BTVX-4AVV.nc', 'type': 'HTTP'},
+     {'url': 'https://thredds.nilu.no/thredds/dodsC/ebas_doi/BT/VX/4A/BTVX-4AVV.nc', 'type': 'OPeNDAP'}]
+    :param variables_list: list of str, optional; a list of ECV names
+    :return: xarray.Dataset object with at least one variable, otherwise returns None
+    """
+    return _read_dataset(dataset_id, variables_list=variables_list)
+
+
 if __name__ == "__main__":
     #print(get_list_platforms())
     #print(query_datasets_stations(['5qss']))
-    dataset_id = "https://thredds.nilu.no/thredds/dodsC/ebas_doi/T6/Q7/ZC/T6Q7-ZCQY.nc"
+    #dataset_id = "https://thredds.nilu.no/thredds/dodsC/ebas_doi/T6/Q7/ZC/T6Q7-ZCQY.nc"
+    dataset_id = [
+        {'url': 'https://thredds.nilu.no/thredds/fileServer/ebas_doi/BT/VX/4A/BTVX-4AVV.nc', 'type': 'HTTP'},
+        {'url': 'https://thredds.nilu.no/thredds/dodsC/ebas_doi/BT/VX/4A/BTVX-4AVV.nc', 'type': 'OPeNDAP'}
+    ]
     print(read_dataset(dataset_id, variables_list=['Aerosol Optical Properties']))
