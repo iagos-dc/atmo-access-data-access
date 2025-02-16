@@ -21,11 +21,83 @@ from icoscp.station import station
 from icoscp.dobj import Dobj
 from icoscp.sparql.runsparql import RunSparql
 
-from . import helper
+from atmoaccess_data_access import helper
 
 # from config import ICOSCP_TOKEN
 # from icoscp.cpauth.authentication import Authentication
 # Authentication(token=ICOSCP_TOKEN)
+
+
+_ICOS_VAR_TO_ECV_MAPPING = {
+    'AP': [
+        'Pressure (surface)',
+        'Pressure',
+        'ap'
+    ],
+    'WD': [
+        'Surface Wind Speed and direction',
+        'wd'
+    ],
+    'WS': [
+        'Surface Wind Speed and direction',
+        'ws'
+    ],
+    'AT': [
+        'Temperature (near surface)',
+        'Temperature',
+        'at'
+    ],
+    'RH': [
+        'Water Vapour (surface)',
+        'Water Vapour (Relative Humidity)',
+        'rh'
+    ],
+    'co2': [
+        'Carbon Dioxide',
+        'Carbon Dioxide, Methane and other Greenhouse gases',
+        'Tropospheric CO2',
+        'co2'
+    ],
+    'co': [
+        'Carbon Monoxide',
+        'Carbon Dioxide, Methane and other Greenhouse gases',
+        'co'
+    ],
+    'ch4': [
+        'Methane',
+        'Carbon Dioxide, Methane and other Greenhouse gases',
+        'Tropospheric CH4',
+        'ch4'
+    ],
+    'n2o': [
+        'Nitrous Oxide',
+        'Carbon Dioxide, Methane and other Greenhouse gases',
+        'n2o'
+    ]
+}
+
+_ICOS_VAR_lowercase_TO_ECV_MAPPING = {k.lower(): v for k, v in _ICOS_VAR_TO_ECV_MAPPING.items()}
+
+_ECV_TO_ICOS_VARS_lowercase = {}
+for icos_var, ecvs in _ICOS_VAR_lowercase_TO_ECV_MAPPING.items():
+    for ecv in ecvs:
+        _ECV_TO_ICOS_VARS_lowercase.setdefault(ecv, []).append(icos_var)
+
+_ICOS_VAR_lowercase_TO_SPEC = {
+    'ap': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'wd': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'ws': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'at': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'rh': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'co2': 'http://meta.icos-cp.eu/resources/cpmeta/atcCo2Product',  # 'http://meta.icos-cp.eu/resources/cpmeta/atcCo2L2DataObject',
+    'co': 'http://meta.icos-cp.eu/resources/cpmeta/atcCoL2DataObject',
+    'ch4': 'http://meta.icos-cp.eu/resources/cpmeta/atcCh4Product',  # 'http://meta.icos-cp.eu/resources/cpmeta/atcCh4L2DataObject',
+    'n2o': 'http://meta.icos-cp.eu/resources/cpmeta/atcN2oL2DataObject'
+}
+
+_SPEC_TO_ICOS_VAR_lowercase = {}
+for k, v in _ICOS_VAR_lowercase_TO_SPEC.items():
+    _SPEC_TO_ICOS_VAR_lowercase.setdefault(v, []).append(k)
 
 
 # all stations info
@@ -66,6 +138,7 @@ def _colname():
     return colname
 
 
+@functools.cache
 def get_list_variables():
     """
     Return a list of Variables from ICOS for the moment this is a
@@ -74,24 +147,10 @@ def get_list_variables():
     -------
     variables : LIST[dicts]
     """
-
-    variables = [{'variable_name': 'AP', 'ECV_name': ['Pressure (surface)', 'Pressure', 'ap']},
-                 {'variable_name': 'WD', 'ECV_name': ['Surface Wind Speed and direction', 'wd']},
-                 {'variable_name': 'WS', 'ECV_name': ['Surface Wind Speed and direction', 'ws']},
-                 {'variable_name': 'AT', 'ECV_name': ['Temperature (near surface)', 'Temperature', 'at']},
-                 {'variable_name': 'RH',
-                  'ECV_name': ['Water Vapour (surface)', 'Water Vapour (Relative Humidity)', 'rh']},
-                 {'variable_name': 'co2',
-                  'ECV_name': ['Carbon Dioxide', 'Carbon Dioxide, Methane and other Greenhouse gases',
-                               'Tropospheric CO2', 'co2']},
-                 {'variable_name': 'co',
-                  'ECV_name': ['Carbon Monoxide', 'Carbon Dioxide, Methane and other Greenhouse gases', 'co']},
-                 {'variable_name': 'ch4',
-                  'ECV_name': ['Methane', 'Carbon Dioxide, Methane and other Greenhouse gases', 'Tropospheric CH4',
-                               'ch4']},
-                 {'variable_name': 'n2o',
-                  'ECV_name': ['Nitrous Oxide', 'Carbon Dioxide, Methane and other Greenhouse gases', 'n2o']}
-                 ]
+    variables = [
+        {'variable_name': variable_name, 'ECV_name': ECV_names}
+        for variable_name, ECV_names in _ICOS_VAR_TO_ECV_MAPPING.items()
+    ]
     return variables
 
 
@@ -106,6 +165,7 @@ def ecv_icos_map():
     return rev_mapping
 
 
+@functools.cache
 def __get_spec(variable_name):
     """
     Return a list of Variables from ICOS for the moment this is a
@@ -114,62 +174,35 @@ def __get_spec(variable_name):
     -------
     variables : LIST[dicts]
     """
-
     # make sure variable_name is lower case
     variable_name = variable_name.lower()
-    specs = {'ap': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-             'wd': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-             'ws': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-             'at': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-             'rh': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-             'co2': 'http://meta.icos-cp.eu/resources/cpmeta/atcCo2Product', #'http://meta.icos-cp.eu/resources/cpmeta/atcCo2L2DataObject',
-             'co': 'http://meta.icos-cp.eu/resources/cpmeta/atcCoL2DataObject',
-             'ch4': 'http://meta.icos-cp.eu/resources/cpmeta/atcCh4Product', #'http://meta.icos-cp.eu/resources/cpmeta/atcCh4L2DataObject',
-             'n2o': 'http://meta.icos-cp.eu/resources/cpmeta/atcN2oL2DataObject'
-             }
-    if variable_name in specs.keys():
-        return specs[variable_name]
-    else:
-        return ''
+    return _ICOS_VAR_lowercase_TO_SPEC.get(variable_name, '')
 
 
+@functools.cache
 def __get_ecv(spec):
-    ecvar = {'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject': ['Pressure (surface)', \
-                                                                            'Surface Wind Speed and direction', \
-                                                                            'Temperature (near surface)', \
-                                                                            'Water Vapour (surface)'],
-             'http://meta.icos-cp.eu/resources/cpmeta/atcCo2Product': ['Carbon Dioxide'],
-             # 'http://meta.icos-cp.eu/resources/cpmeta/atcCo2L2DataObject': ['Carbon Dioxide'],
-             'http://meta.icos-cp.eu/resources/cpmeta/atcCoL2DataObject': ['Carbon Monoxide'],
-             'http://meta.icos-cp.eu/resources/cpmeta/atcCh4L2Product': ['Methane'],
-             'http://meta.icos-cp.eu/resources/cpmeta/atcCh4Product': ['Methane'], # WOLP: this key seemed to be missing
-             # 'http://meta.icos-cp.eu/resources/cpmeta/atcCh4L2DataObject': ['Methane'],
-             'http://meta.icos-cp.eu/resources/cpmeta/atcN2oL2DataObject': ['Nitrous Oxide']
-             }
-
-    if spec in ecvar.keys():
-        return ecvar[spec]
-    else:
-        print(f'__get_ecv: key={spec} not found')
-        return ''
+    icos_vars_lowercase = _SPEC_TO_ICOS_VAR_lowercase.get(spec, [])
+    ecvs = set()
+    for v in icos_vars_lowercase:
+        ecvs.update(_ICOS_VAR_lowercase_TO_ECV_MAPPING[v])
+    return list(ecvs)
 
 
-def query_datasets(variables=[], temporal=[], spatial=[]):
+def query_datasets(codes, variables_list=None, temporal_extent=None):
     """
     return identifiers for datasets constraint by input parameters.
     if a parameter is empty, it will be ignored. if no parameter is
     provided...ALL datasets are returned.
     Parameters
     ----------
-    variables : LIST[STR]
+    codes : LIST[STR]
+        A list of station codes.
+    variables_list : LIST[STR]
         Provide a list of strings to query for variables. Entries\
         matching the variables returned from get_list_variables().
     temporal_extent : LIST[STR,STR] start, end , string at format yyyyMMddTHHmmss
                 or more general str must be convertible with a pandas.
                 date = pandas.to_datetime(date).date()
-    spatial_extent : LIST[min_lon, min_lat, max_lon, max_lat]
-        lat lon must be convertible to float. The bounding box is of format
-        bottom left, top right corner.
     Returns
     -------
     LIST[DICT]
@@ -190,14 +223,27 @@ def query_datasets(variables=[], temporal=[], spatial=[]):
     dataset = __sparql_data()
     dtypes = ['str', 'str', 'str', 'str', 'int', 'datetime64[ns, UTC]', 'datetime64[ns, UTC]', 'datetime64[ns, UTC]']
     dtype = dict(zip(dataset.columns.tolist(), dtypes))
-    dataset.astype(dtype)
+    dataset = dataset.astype(dtype)
 
-    # start filtering according to parameters
+    # add platform_id
+    dataset['platform_id'] = dataset['station'].str.slice(-3)
+
+    # filter on platform codes
+    filter_on_codes = dataset['platform_id'].isin(set(codes))
+    dataset = dataset[filter_on_codes]
+    if dataset.empty:
+        # no dataset correspond to codes
+        return []
+
+    # start filtering according to variables_list
+    if variables_list is None:
+        variables_list = list(_ECV_TO_ICOS_VARS_lowercase)
+
     selected_var = []
     for vv in get_list_variables():
         # convert all to lowercase, for more resilience
         ecv = [v.lower() for v in vv['ECV_name']]
-        for v in variables:
+        for v in variables_list:
             if v.lower() in ecv:
                 selected_var.append(vv['variable_name'])
 
@@ -208,7 +254,9 @@ def query_datasets(variables=[], temporal=[], spatial=[]):
     _dfs = []
     for v in selected_var:
         data = dataset[dataset['spec'] == __get_spec(v)]
-        _dfs.append(data)
+        if not data.empty:
+            # add only non-empty data to the list
+            _dfs.append(data)
 
     if len(_dfs) == 0:
         return []
@@ -218,46 +266,23 @@ def query_datasets(variables=[], temporal=[], spatial=[]):
     df = df.drop_duplicates(subset=['dobj'])
 
     # filter temporal
-    if len(temporal) == 2:
-        df = df[(df.timeStart <= temporal[1]) & (df.timeEnd >= temporal[0])]
-
-    # filter spatial
-    if len(spatial) == 4:
-        stlist = []
-        for s in df.station.unique().tolist():
-            # find stations within bounding box
-            a = stn.loc[stn['uri'] == s]
-
-            if len(a) != 1:
-                # print(f'a={a}, s={s}, variables={variables}, temporal={temporal}, spatial={spatial}')
-                continue
-
-            if float(a.lon) >= spatial[0] and \
-                    float(a.lon) <= spatial[2] and \
-                    float(a.lat) >= spatial[1] and \
-                    float(a.lat) <= spatial[3]:
-                stlist.append(a.uri.values[0])
-        if stlist:
-            df = df[df.station.isin(stlist)]
+    if temporal_extent is not None and len(temporal_extent) == 2:
+        t0, t1 = map(lambda t: pd.to_datetime(t, utc=True), temporal_extent)
+        df = df[(df.timeStart <= t1) & (df.timeEnd >= t0)]
 
     if df.empty:
         return []
-    else:
-        df = df.reset_index(drop=True)
+
+    df = df.reset_index(drop=True)
 
     # transfrom pandas dataframe to dict to conform for envri
     # fair demonstrator
-
-    # add platform_id
-    ids = df.station.to_list()
-    ids = [s[-3:] for s in ids]
-    df['platform_id'] = ids
 
     outlist = []
     import data_processing  # TODO: get rid of this "circular" dependency! implement internal caching, as for ACTRIS
     for r in df.iterrows():
         d = {
-            'title': data_processing.GetICOSDatasetTitleRequest(r[1].dobj).compute(),  
+            'title': data_processing.GetICOSDatasetTitleRequest(r[1].dobj).compute(),
             'file_name': r[1].fileName,
             'urls': [{'url': r[1].dobj, 'type': 'landing_page'}],
             'ecv_variables': __get_ecv(r[1].spec),
@@ -349,12 +374,11 @@ def read_dataset(dataset_id, variables_list=None):
     :param variables_list: list of str, optional; a list of ECV names
     :return: xarray.Dataset object with at least one variable, otherwise returns None
     """
-    ECV_to_icos = ecv_icos_map()
     if variables_list is None:
-        variables_set = set(ECV_to_icos)
+        variables_set = set(_ECV_TO_ICOS_VARS_lowercase)
     else:
-        variables_set = set(variables_list).intersection(ECV_to_icos)
-    icos_variables = set(sum((ECV_to_icos[v] for v in variables_set), start=[]))
+        variables_set = set(variables_list).intersection(_ECV_TO_ICOS_VARS_lowercase)
+    icos_variables_lowercase = set(sum((_ECV_TO_ICOS_VARS_lowercase[v] for v in variables_set), start=[]))
 
     try:
         for url_type_dict in dataset_id:
@@ -375,7 +399,7 @@ def read_dataset(dataset_id, variables_list=None):
 
             # filter according to variables_list
             vs = list(ds)
-            vs = [v for v in vs if v in icos_variables]
+            vs = [v for v in vs if v.lower() in icos_variables_lowercase]
             if not vs:
                 # maybe the next url (if any) will work better...
                 continue
@@ -388,11 +412,13 @@ def read_dataset(dataset_id, variables_list=None):
 
 
 if __name__ == "__main__":
-    # a= get_list_platforms()
+    a = get_list_platforms()
+    codes = [platform['short_name'] for platform in a[5:50]]
     # print(get_list_variables())
-    b = query_datasets(variables=['temperature', 'n2o'], temporal=['2016-01-01', '2016-04-31'])
-    # print(query_datasets(['Pressure (surface)'], ['2018-01-01T03:00:00','2021-12-31T24:00:00'],[10, 40, 23, 60]))
-    # pids = query_datasets(variables=['co2', 'ws','Carbon Dioxide, Methane and other Greenhouse gases'], temporal= ['2018-01-01T03:00:00','2021-12-31T24:00:00'], spatial = [10, 40, 23, 60])
+    b = query_datasets(codes, variables_list=['temperature', 'n2o'], temporal_extent=['2016-01-01T00:00Z', '2016-04-30'])
+    print(b)
+    # print(query_datasets(variables_list=['Pressure (surface)'], temporal_extent=['2018-01-01T03:00:00','2021-12-31T24:00:00']))
+    # pids = query_datasets(variables_list=['co2', 'ws','Carbon Dioxide, Methane and other Greenhouse gases'], temporal_extent=['2018-01-01T03:00:00','2021-12-31T24:00:00'])
     # print(pids)
     # data = read_dataset(pids[0])
     # print(data.head())
