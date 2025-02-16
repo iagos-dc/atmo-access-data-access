@@ -220,7 +220,7 @@ def _create_cache_and_close(url):
     cache.close()
 
 
-def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
+def query_datasets(codes, variables_list=None, temporal_extent=None):
     """
     Query the ACTRIS database for metadata of datasets satisfying the specified criteria.
     """
@@ -240,7 +240,7 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
 
     # remove duplicates, filter on temporal_extent (if required) and on ECV variables (i.e. variables_list)
     if temporal_extent is not None:
-        t0, t1 = map(pd.to_datetime, temporal_extent)
+        t0, t1 = map(lambda t: pd.to_datetime(t, utc=True), temporal_extent)
     all_ids = set()
     filtered_datasets = []
     for dataset in _all_datasets:
@@ -253,7 +253,7 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
         # filter on temporal_extent, if required
         if temporal_extent is not None:
             time_period = dataset['time_period']
-            if pd.to_datetime(time_period[0]) > t1 or pd.to_datetime(time_period[1]) < t0:
+            if pd.to_datetime(time_period[0], utc=True) > t1 or pd.to_datetime(time_period[1], utc=True) < t0:
                 continue
 
         # filter on ECV variables (i.e. variables_list)

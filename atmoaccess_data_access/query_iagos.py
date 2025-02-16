@@ -136,14 +136,7 @@ def get_list_variables():
         raise
 
 
-def query_datasets(variables_list, temporal_extent, spatial_extent):
-    """
-    This function is obsolete. Use query_datasets_stations instead.
-    """
-    raise NotImplementedError
-
-
-def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
+def query_datasets(codes, variables_list=None, temporal_extent=None):
     """
     Query the IAGOS database for metadata of datasets satisfying the specified criteria.
     :param codes: a list of IAGOS platforms codes (short_name); selects datasets with platform_id in the list
@@ -175,9 +168,9 @@ def query_datasets_stations(codes, variables_list=None, temporal_extent=None):
         _variables = set(variables_list)
         datasets = filter(lambda ds: not _variables.isdisjoint(ds['ecv_variables']), datasets)
     if temporal_extent is not None:
-        t0, t1 = map(pd.to_datetime, temporal_extent)
+        t0, t1 = map(lambda t: pd.to_datetime(t, utc=True), temporal_extent)
         datasets = filter(
-            lambda ds: not (pd.to_datetime(ds['time_period'][0]) > t1 or pd.to_datetime(ds['time_period'][1]) < t0),
+            lambda ds: not (pd.to_datetime(ds['time_period'][0], utc=True) > t1 or pd.to_datetime(ds['time_period'][1], utc=True) < t0),
             datasets
         )
 
