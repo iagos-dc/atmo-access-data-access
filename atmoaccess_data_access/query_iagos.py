@@ -164,15 +164,20 @@ def query_datasets(codes, variables_list=None, temporal_extent=None):
         warnings.warn(f'Other error occurred while querying IAGOS datasets for stations={codes}: {err}')
         raise
 
+    # convert time_period to UTC time zone
+    for ds in datasets:
+        for i in [0, 1]:
+            ds['time_period'][i] = pd.to_datetime(ds['time_period'][i], utc=True)
+
+    # filter on variables_list
     if variables_list is not None:
-        _variables = set(variables_list)
-        datasets = filter(lambda ds: not _variables.isdisjoint(ds['ecv_variables']), datasets)
+        variables_set = set(variables_list)
+        datasets = filter(lambda ds: not variables_set.isdisjoint(ds['ecv_variables']), datasets)
+
+    # filter on temporal_extent
     if temporal_extent is not None:
         t0, t1 = map(lambda t: pd.to_datetime(t, utc=True), temporal_extent)
-        datasets = filter(
-            lambda ds: not (pd.to_datetime(ds['time_period'][0], utc=True) > t1 or pd.to_datetime(ds['time_period'][1], utc=True) < t0),
-            datasets
-        )
+        datasets = filter(lambda ds: ds['time_period'][0] <= t1 and ds['time_period'][1] >= t0, datasets)
 
     return list(datasets)
 

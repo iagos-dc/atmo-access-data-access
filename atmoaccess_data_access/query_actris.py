@@ -149,7 +149,10 @@ def _transform_dataset(dataset, variable):
     ecvs_present = _read_dataset(dataset_urls, variables_list=ecvs, get_ECV_only=True)
     if not ecvs_present:
         return None
-    time_period = [dataset['ex_temporal_extent']['time_period_begin'], dataset['ex_temporal_extent']['time_period_end']]
+    time_period = [
+        pd.to_datetime(dataset['ex_temporal_extent']['time_period_begin'], utc=True),
+        pd.to_datetime(dataset['ex_temporal_extent']['time_period_end'], utc=True)
+    ]
     platform_id = dataset['md_data_identification']['facility']['identifier']
     return {
         '_id': dataset['id'],
