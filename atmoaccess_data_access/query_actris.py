@@ -256,7 +256,7 @@ def query_datasets(codes, variables_list=None, temporal_extent=None):
         # filter on temporal_extent, if required
         if temporal_extent is not None:
             time_period = dataset['time_period']
-            if pd.to_datetime(time_period[0], utc=True) > t1 or pd.to_datetime(time_period[1], utc=True) < t0:
+            if time_period[0] > t1 or time_period[1] < t0:
                 continue
 
         # filter on ECV variables (i.e. variables_list)
