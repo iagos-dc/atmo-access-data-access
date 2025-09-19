@@ -10,363 +10,327 @@ https://gcos.wmo.int/en/essential-climate-variables/pressure/ecv-requirements
 https://gcos.wmo.int/en/essential-climate-variables/ghg/ecv-requirements
 '''
 
-import functools
-import pandas as pd
+from dataclasses import dataclass
+import datetime
+from numpy.typing import ArrayLike
+from pathlib import Path
+import pickle
+import requests
 import xarray as xr
 import warnings
 
 warnings.filterwarnings("ignore")
 
-from icoscp.station import station
-from icoscp.dobj import Dobj
-from icoscp.sparql.runsparql import RunSparql
-
-from atmoaccess_data_access import helper
-
-# from config import ICOSCP_TOKEN
-# from icoscp.cpauth.authentication import Authentication
-# Authentication(token=ICOSCP_TOKEN)
+from icoscp_core.icos import meta, data, ATMO_STATION
+from icoscp_core.metacore import StationTimeSeriesMeta
 
 
-_ICOS_VAR_TO_ECV_MAPPING = {
-    'AP': [
-        'Pressure (surface)',
-        'Pressure',
-        'ap'
-    ],
-    'WD': [
-        'Surface Wind Speed and direction',
-        'wd'
-    ],
-    'WS': [
-        'Surface Wind Speed and direction',
-        'ws'
-    ],
-    'AT': [
-        'Temperature (near surface)',
-        'Temperature',
-        'at'
-    ],
-    'RH': [
-        'Water Vapour (surface)',
-        'Water Vapour (Relative Humidity)',
-        'rh'
-    ],
-    'co2': [
-        'Carbon Dioxide',
-        'Carbon Dioxide, Methane and other Greenhouse gases',
-        'Tropospheric CO2',
-        'co2'
-    ],
-    'co': [
-        'Carbon Monoxide',
-        'Carbon Dioxide, Methane and other Greenhouse gases',
-        'co'
-    ],
-    'ch4': [
-        'Methane',
-        'Carbon Dioxide, Methane and other Greenhouse gases',
-        'Tropospheric CH4',
-        'ch4'
-    ],
-    'n2o': [
-        'Nitrous Oxide',
-        'Carbon Dioxide, Methane and other Greenhouse gases',
-        'n2o'
-    ]
+_SPARQL_ENDPOINT = 'https://meta.icos-cp.eu/sparql'
+
+_MAPPING_ECV_ICOS = {
+    'Pressure (surface)': ['AP'],
+    'Surface Wind Speed and direction': ['WD', 'WS'],
+    'Temperature (near surface)': ['AT'],
+    'Water Vapour (surface)': ['RH'],
+    'Carbon Dioxide, Methane and other Greenhouse gases': ['co2', 'ch4', 'n2o', 'co'],
+    'Carbon Dioxide': ['co2'],
+    'Methane': ['ch4'],
+    'Nitrous Oxide': ['n2o'],
+    'Carbon Monoxide': ['co']
 }
 
-_ICOS_VAR_lowercase_TO_ECV_MAPPING = {k.lower(): v for k, v in _ICOS_VAR_TO_ECV_MAPPING.items()}
-
-_ECV_TO_ICOS_VARS_lowercase = {}
-for icos_var, ecvs in _ICOS_VAR_lowercase_TO_ECV_MAPPING.items():
-    for ecv in ecvs:
-        _ECV_TO_ICOS_VARS_lowercase.setdefault(ecv, []).append(icos_var)
-
-_ICOS_VAR_lowercase_TO_SPEC = {
-    'ap': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-    'wd': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-    'ws': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-    'at': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-    'rh': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
-    'co2': 'http://meta.icos-cp.eu/resources/cpmeta/atcCo2Product',  # 'http://meta.icos-cp.eu/resources/cpmeta/atcCo2L2DataObject',
-    'co': 'http://meta.icos-cp.eu/resources/cpmeta/atcCoL2DataObject',
-    'ch4': 'http://meta.icos-cp.eu/resources/cpmeta/atcCh4Product',  # 'http://meta.icos-cp.eu/resources/cpmeta/atcCh4L2DataObject',
-    'n2o': 'http://meta.icos-cp.eu/resources/cpmeta/atcN2oL2DataObject'
+_MAPPING_ICOS_VAR_TO_SPEC = {
+    'AP': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'WD': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'WS': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'AT': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'RH': 'http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject',
+    'co2': 'http://meta.icos-cp.eu/resources/cpmeta/ObspackTimeSerieResult',  # Alternatives: atcCo2Product / atcCo2L2DataObject
+    'ch4': 'http://meta.icos-cp.eu/resources/cpmeta/ObspackCH4TimeSeriesResult',  # Alternatives: atcCh4Product / atcCh4L2DataObject
+    'n2o': 'http://meta.icos-cp.eu/resources/cpmeta/ObspackN2oTimeSeriesResult',  # Alternatives: atcN2oProduct / atcN2oL2DataObject
+    'co': 'http://meta.icos-cp.eu/resources/cpmeta/ObspackCOTimeSeriesResult'  # Alternatives: atcCoProduct / atcCoL2DataObject
 }
 
-_SPEC_TO_ICOS_VAR_lowercase = {}
-for k, v in _ICOS_VAR_lowercase_TO_SPEC.items():
-    _SPEC_TO_ICOS_VAR_lowercase.setdefault(v, []).append(k)
+_ECVS: set[str] = set(_MAPPING_ECV_ICOS.keys())
+
+def _reverse_mapping(mapping: dict[str, list[str]]) -> dict[str, list[str]]:
+    reversed_mapping: dict[str, list[str]] = {}
+    for key, values in mapping.items():
+        for value in values:
+            reversed_mapping.setdefault(value, []).append(key)
+    return reversed_mapping
+
+_MAPPING_ICOS_ECV = _reverse_mapping(_MAPPING_ECV_ICOS)
+
+_MAPPING_ECV_TO_ICOS_SPEC: dict[str, list[str]] = {}
+for ecv, icos_vars in _MAPPING_ECV_ICOS.items():
+    for icos_var in icos_vars:
+        _MAPPING_ECV_TO_ICOS_SPEC.setdefault(ecv, []).append(_MAPPING_ICOS_VAR_TO_SPEC[icos_var])
+# Remove duplicates.
+for ecv, icos_specs in _MAPPING_ECV_TO_ICOS_SPEC.items():
+    _MAPPING_ECV_TO_ICOS_SPEC[ecv] = list(set(icos_specs))
+
+_MAPPING_ICOS_SPEC_TO_ECV = _reverse_mapping(_MAPPING_ECV_TO_ICOS_SPEC)
+
+class TitleCache:
+    def __init__(self, filename: Path, expire_time: int) -> None:
+        self.filename: Path = filename
+        self.expire_time: int = expire_time
+        self.cache: dict[str, tuple[str, int]] = self.load()
+    def load(self) -> dict[str, tuple[str, int]]:
+        if self.filename.exists():
+            with open(self.filename, 'rb') as cache_file:
+                return pickle.load(cache_file)
+        return {}
+    def save(self) -> None:
+        with open(self.filename, 'wb') as cache_file:
+            pickle.dump(self.cache, cache_file)
+    def get(self, dobj_url: str) -> str | None:
+        if dobj_url in self.cache.keys():
+            title, timestamp = self.cache[dobj_url]
+            if datetime.datetime.now().timestamp() - timestamp > self.expire_time:
+                self.cache.pop(dobj_url)
+                self.save()
+            else:
+                return title
+        return None
+    def set(self, dobj_url: str, title: str) -> None:
+        self.cache[dobj_url] = (title, int(datetime.datetime.now().timestamp()))
+        self.save()
+
+def _open_cache(path_to_cache: Path) -> None:
+    global _TITLE_CACHE
+    _TITLE_CACHE = TitleCache(path_to_cache, 3600*24)
 
 
-# all stations info
-def get_list_platforms():
-    '''
-    Query ICOS for a list of atmosperic stations
-    Returns
-    -------
-    stations : LIST[dicts]
-    '''
+@dataclass(frozen=True)
+class Variable:
+    name: str
+    label: str | None
+    unit: str | None
 
-    stations = station.getIdList(project='all')
 
-    # remove ecosystem and ocean for this demonstrator
-    # but, stations would contain ALL stations from ICOS
-    stations = stations[stations['theme'] == 'AS']
-    # make projection and rename columns to conform
-    col_dict = _colname()
-    stations = stations[list(col_dict)].rename(columns=col_dict)
-    for col in ['latitude', 'longitude', 'altitude']:
-        stations[col] = pd.to_numeric(stations[col])
-    # transform to desired output format
-    stations = stations.to_dict(orient='records')
+def get_list_platforms() -> list[dict[str, str | float | None]]:
+    """
+    Retrieves a list of ICOS platforms (stations). Each platform is described with a dictionary containing the keys:
+    - 'short_name'
+    - 'long_name'
+    - 'longitude'
+    - 'latitude'
+    - 'altitude'
+    - 'URI'
+    e.g. {'short_name': 'HTM', 'long_name': 'Hyltemossa', 'longitude': 13.4189, 'latitude': 56.0976, 'altitude': 115.0, 'URI': 'http://meta.icos-cp.eu/resources/stations/AS_HTM'}
+    :return: list of dict
+    """
 
+    stations: list[dict[str, str | float | None]] = []
+    for station in meta.list_stations(ATMO_STATION):
+        stations.append({
+            'short_name': station.id,
+            'long_name': station.name,
+            'longitude': station.lon,
+            'latitude': station.lat,
+            'altitude': station.elevation,
+            'URI': station.uri
+        })
     return stations
 
 
-def _colname():
-    # rename columns for compatibility
-    colname = {
-        'id': 'short_name',
-        'name': 'long_name',
-        'lat': 'latitude',
-        'lon': 'longitude',
-        'elevation': 'altitude',
-        'uri': 'URI',
-    }
-    return colname
-
-
-@functools.cache
-def get_list_variables():
+def get_list_variables() -> list[dict[str, str | list[str]]]:
     """
-    Return a list of Variables from ICOS for the moment this is a
-    fixed dictionary, but could / should be dynamically queried
-    Returns
-    -------
-    variables : LIST[dicts]
+    Retrieves a ICOS mapping between variable names and ECV names. The mapping is a list of dict. Each dict has
+    the keys
+    - 'variable_name'
+    - 'ECV_name'
+    and associates a single ICOS variable with one or many ECV name(s)
+    e.g. {'variable_name': 'ch4', 'ECV_name': ['Methane', 'Carbon Dioxide, Methane and other Greenhouse gases']}
+    :return: list of dict
     """
-    variables = [
+    return [
         {'variable_name': variable_name, 'ECV_name': ECV_names}
-        for variable_name, ECV_names in _ICOS_VAR_TO_ECV_MAPPING.items()
+        for variable_name, ECV_names in _MAPPING_ICOS_ECV.items()
     ]
-    return variables
 
 
-@functools.cache
-def ecv_icos_map():
-    rev_mapping = {}
-    for var in get_list_variables():
-        variable_name = var['variable_name']
-        ECV_names = var['ECV_name']
-        for ECV_name in ECV_names:
-            rev_mapping.setdefault(ECV_name, []).append(variable_name)
-    return rev_mapping
-
-
-@functools.cache
-def __get_spec(variable_name):
+def query_datasets(
+        codes: list[str],
+        variables_list: list[str] | None=None,
+        temporal_extent: list[str] | None=None
+        ) -> list[dict[str, str | list[str] | list[dict[str, str]] | None]]:
     """
-    Return a list of Variables from ICOS for the moment this is a
-    fixed dictionary, but could / should be dynamically queried
-    Returns
-    -------
-    variables : LIST[dicts]
+    Query the ICOS database for metadata of datasets satisfying the specified criteria.
+    :param codes: a list of ICOS stations codes (short_name); selects datasets with platform_id in the list
+    :param variables_list: optional; a list of ECV names; selects datasets with ecv_variables not disjoint with the list
+    :param temporal_extent: optional; a list of the form [start_date, end_date]; start_date and end_date
+    must match some ISO 8601 format; selects datasets with time_period overlapping temporal_extent interval
+    :return: a list (possibly empty if no dataset satisfies the specified criteria) of dict with the keys:
+    - 'title' (title of the dataset)
+    - 'urls' (list of urls for the dataset, where the `type` of each url can be any of `landing_page`, `data_file`, `opendap`)
+    - 'ecv_variables' (list of ecv variables included in the dataset)
+    - 'time_period' (time period covered by the dataset)
+    - 'platform_id' (id of the station, i.e. identical to `short_name` of the platform returned by method `get_list_platforms`)
     """
-    # make sure variable_name is lower case
-    variable_name = variable_name.lower()
-    return _ICOS_VAR_lowercase_TO_SPEC.get(variable_name, '')
+    # Keep only variables that are ECVs and list the corresponding ICOS data object specifications.
+    selected_vars = _ECVS if variables_list is None else _ECVS.intersection(variables_list)
+    specs: set[str] = set()
+    for v in selected_vars:
+        specs.update(_MAPPING_ECV_TO_ICOS_SPEC.get(v, []))
 
+    # Check the validity of values in 'temporal_extent'.
+    if temporal_extent is not None:
+        if len(temporal_extent) != 2:
+            raise ValueError('The temporal extent must include exactly two values or be None.')
+        try:
+            tstart, tend = map(lambda t: datetime.datetime.fromisoformat(t).isoformat(), temporal_extent)
+            temporal_extent = [tstart, tend]
+        except ValueError:
+            raise ValueError('The temporal extent should be specified using ISO 8601 formats.')
 
-@functools.cache
-def __get_ecv(spec):
-    icos_vars_lowercase = _SPEC_TO_ICOS_VAR_lowercase.get(spec, [])
-    ecvs = set()
-    for v in icos_vars_lowercase:
-        ecvs.update(_ICOS_VAR_lowercase_TO_ECV_MAPPING[v])
-    return list(ecvs)
+    # Get metadata about data objects satisfying the specified criteria about ICOS data object specification,
+    # stations of origin, and temporal extent.
+    sparql_query = _sparql_query(list(specs), codes, temporal_extent)
+    response = requests.post(
+        _SPARQL_ENDPOINT,
+        headers={'Accept': 'application/json'},
+        data=bytes(sparql_query, 'utf-8'))
+    if not response.ok:
+        raise Exception(f'Something went wrong when querying the ICOS SPARQL endpoint with SPARQL query:\n{sparql_query}')
+    dobjs_info: list[dict[str, dict[str, str]]] = response.json()['results']['bindings']
 
-
-def query_datasets(codes, variables_list=None, temporal_extent=None):
-    """
-    return identifiers for datasets constraint by input parameters.
-    if a parameter is empty, it will be ignored. if no parameter is
-    provided...ALL datasets are returned.
-    Parameters
-    ----------
-    codes : LIST[STR]
-        A list of station codes.
-    variables_list : LIST[STR]
-        Provide a list of strings to query for variables. Entries\
-        matching the variables returned from get_list_variables().
-    temporal_extent : LIST[STR,STR] start, end , string at format yyyyMMddTHHmmss
-                or more general str must be convertible with a pandas.
-                date = pandas.to_datetime(date).date()
-    Returns
-    -------
-    LIST[DICT]
-    Where DICT is of form {title:’’, urls:[{url:’’, type:”}], ecv_variables:[], time_period:[start, end], platform_id:””}
-    title: title of the dataset
-    urls: list of urls for the dataset. Can include link to a landing page, link to the data file, opendap link
-    url.type: type of the url. Should be in list: landing_page, data_file, opendap
-    ecv_variables: list of ecv variables included in the dataset
-    time_period: time period covered by the dataset
-    platform_id: id of the station (i.e. identical to short_name of the platform return by method get_list_platforms())
-    If there are no results an empty list is returned
-    """
-    stn = station.getIdList(project='all')
-    stn = stn[(stn['theme'] == 'AS')] #& (stn['icosClass'].isin(['1', '2', 'Associated']))]
-    dtypes = ['str', 'str', 'str', 'str', 'float', 'float', 'float', 'str', 'str']
-    dtype = dict(zip(stn.columns.tolist(), dtypes))
-    # get all datasets and convert dtype
-    dataset = __sparql_data()
-    dtypes = ['str', 'str', 'str', 'str', 'int', 'datetime64[ns, UTC]', 'datetime64[ns, UTC]', 'datetime64[ns, UTC]']
-    dtype = dict(zip(dataset.columns.tolist(), dtypes))
-    dataset = dataset.astype(dtype)
-
-    # add platform_id
-    dataset['platform_id'] = dataset['station'].str.slice(-3)
-
-    # filter on platform codes
-    filter_on_codes = dataset['platform_id'].isin(set(codes))
-    dataset = dataset[filter_on_codes]
-    if dataset.empty:
-        # no dataset correspond to codes
-        return []
-
-    # start filtering according to variables_list
-    if variables_list is None:
-        variables_list = list(_ECV_TO_ICOS_VARS_lowercase)
-
-    selected_var = []
-    for vv in get_list_variables():
-        # convert all to lowercase, for more resilience
-        ecv = [v.lower() for v in vv['ECV_name']]
-        for v in variables_list:
-            if v.lower() in ecv:
-                selected_var.append(vv['variable_name'])
-
-    # make sure there are no duplicates
-    selected_var = list(set(selected_var))
-
-    # filter provided variables from all datasets
-    _dfs = []
-    for v in selected_var:
-        data = dataset[dataset['spec'] == __get_spec(v)]
-        if not data.empty:
-            # add only non-empty data to the list
-            _dfs.append(data)
-
-    if len(_dfs) == 0:
-        return []
-    df = pd.concat(_dfs)
-
-    # make sure there are no duplicates (meteo variables are in the same file)
-    df = df.drop_duplicates(subset=['dobj'])
-
-    # filter temporal
-    if temporal_extent is not None and len(temporal_extent) == 2:
-        t0, t1 = map(lambda t: pd.to_datetime(t, utc=True), temporal_extent)
-        df = df[(df.timeStart <= t1) & (df.timeEnd >= t0)]
-
-    if df.empty:
-        return []
-
-    df = df.reset_index(drop=True)
-
-    # transfrom pandas dataframe to dict to conform for envri
-    # fair demonstrator
-
-    outlist = []
-    import data_processing  # TODO: get rid of this "circular" dependency! implement internal caching, as for ACTRIS
-    for r in df.iterrows():
-        d = {
-            'title': data_processing.GetICOSDatasetTitleRequest(r[1].dobj).compute(),
-            'file_name': r[1].fileName,
-            'urls': [{'url': r[1].dobj, 'type': 'landing_page'}],
-            'ecv_variables': __get_ecv(r[1].spec),
-            'time_period': [r[1].timeStart, r[1].timeEnd],
-            'platform_id': r[1].platform_id,
-        }
-        outlist.append(d)
+    outlist: list[dict[str, str | list[str] | list[dict[str, str]] | None]] = []
+    for dobj in dobjs_info:
+        title = _TITLE_CACHE.get(dobj['dobj']['value'])
+        if title is None:
+            dobj_meta = meta.get_dobj_meta(dobj['dobj']['value'])
+            title = dobj_meta.references.title or ""
+            _TITLE_CACHE.set(dobj['dobj']['value'], title)
+        outlist.append({
+            'title': title,
+            'file_name': dobj['fileName']['value'],
+            'urls': [{'url': dobj['dobj']['value'], 'type': 'landing_page'}],
+            'ecv_variables': _MAPPING_ICOS_SPEC_TO_ECV[dobj['spec']['value']],
+            'time_period': [dobj['timeStart']['value'], dobj['timeEnd']['value']],
+            'platform_id': dobj['stationId']['value'],
+        })
     return outlist
 
 
-def __sparql_data():
-    q = """	   prefix cpmeta: <http://meta.icos-cp.eu/ontologies/cpmeta/>
-     prefix prov: <http://www.w3.org/ns/prov#>
-    	select ?station ?dobj ?spec ?fileName ?size ?submTime ?timeStart ?timeEnd
-    	where {
-        		VALUES ?spec {
-        			<http://meta.icos-cp.eu/resources/cpmeta/atcCh4Product> 
-        			<http://meta.icos-cp.eu/resources/cpmeta/atcCoL2DataObject>
-        			<http://meta.icos-cp.eu/resources/cpmeta/atcCo2Product>
-        			<http://meta.icos-cp.eu/resources/cpmeta/atcMtoL2DataObject>
-        			<http://meta.icos-cp.eu/resources/cpmeta/atcN2oL2DataObject>}
-        	?dobj cpmeta:hasObjectSpec ?spec .
-        	?dobj cpmeta:hasSizeInBytes ?size .
-        	?dobj cpmeta:hasName ?fileName .
-        	?dobj cpmeta:wasAcquiredBy/prov:wasAssociatedWith ?station .
-        	?dobj cpmeta:wasSubmittedBy/prov:endedAtTime ?submTime .
-        	?dobj cpmeta:hasStartTime | (cpmeta:wasAcquiredBy / prov:startedAtTime) ?timeStart .
-        	?dobj cpmeta:hasEndTime | (cpmeta:wasAcquiredBy / prov:endedAtTime) ?timeEnd .
-        	FILTER NOT EXISTS {[] cpmeta:isNextVersionOf ?dobj}
-        	{
-        		{FILTER NOT EXISTS {?dobj cpmeta:hasVariableName ?varName}}
-        		UNION
-        		{
-        			?dobj cpmeta:hasVariableName ?varName
-        			FILTER (?varName = "co2" || ?varName = "ch4" || ?varName = "co" || ?varName = "n2o" || ?varName = "RH" || ?varName = "WD" || ?varName = "WS")
-        		}
-        	}
-        }
+def _sparql_query(specs: list[str], station_ids: list[str], temporal_extent: list[str] | None):
+    specs_str = f'<{"> <".join(specs)}>' if len(specs) > 0 else ''
+    conditions_on_station_ids = [f'?stationId = "{s_id}"' for s_id in station_ids]
+    station_ids_filter = ' || '.join(conditions_on_station_ids)
+    if temporal_extent is None:
+        temporal_filter_clause = ''
+    else:
+        temporal_filter_clause = (
+            f'FILTER ( ?timeEnd >= "{temporal_extent[0]}"^^xsd:dateTime '
+            f'&& ?timeStart <= "{temporal_extent[1]}"^^xsd:dateTime )'
+        )
+    return f"""
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX cpmeta: <http://meta.icos-cp.eu/ontologies/cpmeta/>
+SELECT ?dobj ?spec ?fileName ?stationId ?timeStart ?timeEnd
+WHERE {{
+    VALUES ?spec {{ {specs_str} }}
+    ?dobj cpmeta:hasObjectSpec ?spec .
+    ?dobj cpmeta:hasSizeInBytes ?size .
+    ?dobj cpmeta:hasName ?fileName .
+    ?dobj cpmeta:wasAcquiredBy/prov:wasAssociatedWith/cpmeta:hasStationId ?stationId .
+    ?dobj cpmeta:wasSubmittedBy/prov:endedAtTime ?submTime .
+    ?dobj cpmeta:hasStartTime | (cpmeta:wasAcquiredBy / prov:startedAtTime) ?timeStart .
+    ?dobj cpmeta:hasEndTime | (cpmeta:wasAcquiredBy / prov:endedAtTime) ?timeEnd .
+    ?dobj cpmeta:hasVariableName ?varName .
+    FILTER NOT EXISTS {{ [] cpmeta:isNextVersionOf ?dobj }}
+    FILTER ( {station_ids_filter} )
+    {temporal_filter_clause}
+    {{
+        {{ FILTER NOT EXISTS {{ ?dobj cpmeta:hasVariableName ?varName }} }}
+        UNION
+        {{ FILTER (?varName = "co2" || ?varName = "ch4" || ?varName = "co" || ?varName = "n2o" || ?varName = "RH" || ?varName = "WD" || ?varName = "WS") }}
+    }}
+}}
     """
-    sparql = RunSparql(q, output_format='pandas').run()
-
-    return sparql
 
 
-def _read_dataset(pid):
-    digital_object = Dobj(pid)
-    # Get data & meta-data of the digital object.
-    data_df, meta_data = digital_object.data, digital_object.info
-    # In case of empty data or meta-data return an empty dataset.
-    if data_df is None or meta_data is None:
-        return None
-    # Initiate a dataset from the `data_df` dataframe.
-    dataset = xr.Dataset.from_dataframe(data_df)
+def _read_dataset(dobj_uri: str) -> xr.Dataset:
+    dobj_meta = meta.get_dobj_meta(dobj_uri)
+    dobj_data = data.get_columns_as_arrays(dobj_meta)
 
-    # setup global attributes
-    dobj_station = getattr(digital_object, 'station', None)
+    # Extract relevant attributes from metadata.
+    variables: list[Variable] = []
+    if isinstance(dobj_meta.specificInfo, StationTimeSeriesMeta):
+        station = dobj_meta.specificInfo.acquisition.station
+        sampling_height = dobj_meta.specificInfo.acquisition.samplingHeight
+        # Extract relevant information about the variables (columns).
+        if dobj_meta.specificInfo.columns is not None:
+            for variable in dobj_meta.specificInfo.columns:
+                # In Obspack netCDF data files, the column with gas concentration values is called 'value'.
+                # The label of the valueType can be used to determine the gas species.
+                if variable.label == 'value' and variable.valueType.self.label is not None:
+                    variable_name = variable.valueType.self.label.split(' ')[0].lower()
+                    # Replace the name of the 'value' column with the name of the gas species in the dictionary containing data.
+                    dobj_data[variable_name] = dobj_data.pop('value')
+                elif variable.label == 'TIMESTAMP':
+                    variable_name = 'time'
+                else:
+                    variable_name = variable.label
+                variables.append(
+                    Variable(
+                        name=variable_name,
+                        label=variable.valueType.self.label,
+                        unit=variable.valueType.unit))
+    else:
+        station = dobj_meta.specificInfo.station
+        sampling_height = dobj_meta.specificInfo.samplingHeight
+    if station is None:
+        station_id = None
+        station_name = None
+        station_lon = None
+        station_lat = None
+        station_alt = None
+    else:
+        station_id = station.id
+        station_name = station.org.name
+        if station.location is None:
+            station_lon = None
+            station_lat = None
+            station_alt = None
+        else:
+            station_lon = station.location.lon
+            station_lat = station.location.lat
+            station_alt = station.location.alt
+
+    # Some datasets have a "time" variable and other have a "TIMESTAMP" variable.
+    # Use the "time" label everywhere.
+    if 'TIMESTAMP' in dobj_data.keys():
+        dobj_data['time'] = dobj_data.pop('TIMESTAMP')
+    if 'time' not in dobj_data.keys():
+        raise RuntimeError(f'ICOS dataset "{dobj_uri}" does not contain any "time" or "TIMESTAMP" variable.')
+
+    # Restructure the dictionary to match the structure requested by xarray.Dataset.from_dict.
+    dobj_data_formatted: dict[str, dict[str, ArrayLike]] = {
+        var: {'dims': ('time'), 'data': vals} for var, vals in dobj_data.items()}
+
+    dataset = xr.Dataset.from_dict(dobj_data_formatted)
     dataset.attrs = {
-        'title': helper.getkeyvals(meta_data, 'references', 'title'),
-        'station_id': helper.getkeyvals(dobj_station, 'id'),
-        'station_name': helper.getkeyvals(dobj_station, 'org', 'name'),
-        'station_lon': getattr(digital_object, 'lon', None),
-        'station_lat': getattr(digital_object, 'lat', None),
-        'station_alt': getattr(digital_object, 'alt', None),
-        'sampling_height': helper.getkeyvals(meta_data, 'specificInfo', 'acquisition', 'samplingHeight')
+        'title': dobj_meta.references.title,
+        'station_id': station_id,
+        'station_name': station_name,
+        'station_lon': station_lon,
+        'station_lat': station_lat,
+        'station_alt': station_alt,
+        'sampling_height': sampling_height
     }
+    for variable in variables:
+        dataset[variable.name] = dataset[variable.name].assign_attrs({
+            'label': variable.label, 'units': variable.unit
+        })
 
-    # Loop over the variables in the meta-data.
-    for variable_dict in meta_data['specificInfo']['columns']:
-        attributes = dict()
-        variable_name = variable_dict['label']
-        # Extract 'label' meta-data.
-        attributes['label'] = variable_dict['valueType']['self']['label']
-        # Some variables do not come with units.
-        if 'unit' in variable_dict['valueType'].keys():
-            # Extract 'units' meta-data.
-            attributes['units'] = variable_dict['valueType']['unit']
-        # Update the variables' attributes of the initialized dataset
-        # in-place. Each extracted meta-data value will be a new
-        # attribute under the corresponding variable.
-        dataset[variable_name] = dataset[variable_name].assign_attrs(attributes)
     return dataset
 
 
-def read_dataset(dataset_id, variables_list=None):
+def read_dataset(dataset_id: list[dict[str, str]], variables_list: list[str] | None=None):
     """
     Retrieves a dataset identified by dataset_id and selects variables listed in variables_list.
     :param dataset_id: list of dict with keys 'url', 'type', e.g.
@@ -374,51 +338,42 @@ def read_dataset(dataset_id, variables_list=None):
     :param variables_list: list of str, optional; a list of ECV names
     :return: xarray.Dataset object with at least one variable, otherwise returns None
     """
-    if variables_list is None:
-        variables_set = set(_ECV_TO_ICOS_VARS_lowercase)
+    # Keep only variables that are ECVs and list the corresponding ICOS variables.
+    selected_vars = _ECVS if variables_list is None else _ECVS.intersection(variables_list)
+    icos_variables: set[str] = set()
+    for v in selected_vars:
+        icos_variables.update(_MAPPING_ECV_ICOS.get(v, []))
+
+    # Go through all the URLs provided for the dataset and use the one corresponding to a landing page to fetch the data.
+    for url_info in dataset_id:
+        url = url_info['url']
+        url_type = url_info['type']
+        if url_type.lower() != 'landing_page':
+            continue
+
+        try:
+            ds = _read_dataset(url)
+        except Exception as e:
+            raise RuntimeError(f'Reading the ICOS dataset failed: {dataset_id}') from e
+
+        # Filter the dataset to keep only the requested variables.
+        variables: set[str] = set([str(v) for v in ds.data_vars]).intersection(icos_variables)
+        if len(variables) == 0:
+            # maybe the next url (if any) will work better...
+            continue
+        ds = ds[variables]
+        return ds
     else:
-        variables_set = set(variables_list).intersection(_ECV_TO_ICOS_VARS_lowercase)
-    icos_variables_lowercase = set(sum((_ECV_TO_ICOS_VARS_lowercase[v] for v in variables_set), start=[]))
-
-    try:
-        for url_type_dict in dataset_id:
-            pid = url_type_dict['url']
-            typ = url_type_dict['type']
-            if typ.lower() != 'landing_page':
-                continue
-            ds = _read_dataset(pid)
-            if ds is None:
-                # maybe the next url (if any) will work better...
-                continue
-
-            # re-index the dataset using 'TIMESTAMP' variable and rename it to 'time'
-            ds = ds.set_coords('TIMESTAMP')\
-                    .swap_dims({'index': 'TIMESTAMP'})\
-                    .reset_coords('index', drop=True)\
-                    .rename({'TIMESTAMP': 'time'})
-
-            # filter according to variables_list
-            vs = list(ds)
-            vs = [v for v in vs if v.lower() in icos_variables_lowercase]
-            if not vs:
-                # maybe the next url (if any) will work better...
-                continue
-            ds = ds[vs]
-            return ds.load()
-
-    except Exception as e:
-        raise RuntimeError(f'Reading the ICOS dataset failed: {dataset_id}') from e
-    return None
+        raise RuntimeError(f'No data or no ECV was found in ICOS dataset: {dataset_id}')
 
 
 if __name__ == "__main__":
-    a = get_list_platforms()
-    codes = [platform['short_name'] for platform in a[5:50]]
-    # print(get_list_variables())
-    b = query_datasets(codes, variables_list=['temperature', 'n2o'], temporal_extent=['2016-01-01T00:00Z', '2016-04-30'])
-    print(b)
-    # print(query_datasets(variables_list=['Pressure (surface)'], temporal_extent=['2018-01-01T03:00:00','2021-12-31T24:00:00']))
-    # pids = query_datasets(variables_list=['co2', 'ws','Carbon Dioxide, Methane and other Greenhouse gases'], temporal_extent=['2018-01-01T03:00:00','2021-12-31T24:00:00'])
-    # print(pids)
-    # data = read_dataset(pids[0])
-    # print(data.head())
+    stations = get_list_platforms()
+    codes = [station['short_name'] for station in stations[5:10]]
+    info_datasets = query_datasets(codes, variables_list=['Temperature (near surface)', 'Nitrous Oxide'], temporal_extent=['2023-01-01T00:00Z', '2024-04-30'])
+    #info_datasets = query_datasets(codes, variables_list=['Pressure (surface)'], temporal_extent=['2018-01-01T03:00:00','2021-12-31T23:00:00'])
+    #info_datasets = query_datasets(codes, variables_list=['Carbon Dioxide', 'Surface Wind Speed and direction','Carbon Dioxide, Methane and other Greenhouse gases'], temporal_extent=['2018-01-01T03:00:00','2021-12-31T23:00:00'])
+    dataset = read_dataset(info_datasets[0]['urls'])
+    print(f'Stations included in search:\n{codes}')
+    print(f'\n\nInformation about the datasets that were found:\n{info_datasets}')
+    print(f'\n\nFirst rows of the first dataset:\n{dataset}')
