@@ -18,7 +18,9 @@ _CACHE_EXPIRE_TIME = 3600 * 36  # cache expires in 36h
 
 REST_URL_PATH = PROD_API
 REST_URL_STATIONS = REST_URL_PATH + "/api/facilities"
-DVAS_REPOSITORY_ID = "In-Situ"  # only In-Situ datasets are served via OPeNDAP/HTTP from thredds
+# restricted to In-Situ to keep parity of functionality with the old code: _read_dataset only parses EBAS netCDF
+# (requires 'ebas_component' attrs), so datasets from other ACTRIS DCs were never usable
+DVAS_REPOSITORY_ID = "In-Situ"
 # facilities with any ACTRIS National Facility labelling status other than this are treated as ACTRIS NF
 _NF_NOT_LABELLED = "not labelled"
 
