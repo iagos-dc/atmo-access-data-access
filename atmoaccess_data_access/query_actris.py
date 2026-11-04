@@ -80,7 +80,8 @@ def get_list_platforms():
         all_facilities = []
 
         for facility in response.json():
-            if facility.get('actris_national_facility', _NF_NOT_LABELLED) == _NF_NOT_LABELLED:
+            # missing, null or empty labelling status is treated as not labelled
+            if (facility.get('actris_national_facility') or _NF_NOT_LABELLED) == _NF_NOT_LABELLED:
                 continue
             # GeoJSON order: [lon, lat, alt]; location may be missing
             coords = (facility.get('location') or {}).get('coordinates') or []
