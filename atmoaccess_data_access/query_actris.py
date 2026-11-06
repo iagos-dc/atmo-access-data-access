@@ -4,6 +4,8 @@ import io
 import diskcache
 import requests
 from requests.exceptions import HTTPError
+import httpx
+from dvas.client import BoolQuery, QueryField, SortType, PROD_API, search
 import pandas as pd
 import xarray as xr
 
@@ -14,10 +16,13 @@ logger = logging.getLogger(__name__)
 ALLOW_READ_DATASET_VIA_HTTP = True  # indicates if the routine read_dataset can fallback to reading via http if reading via opendap failed
 _CACHE_EXPIRE_TIME = 3600 * 36  # cache expires in 36h
 
-REST_URL_PATH = "https://prod-actris-md2.nilu.no/"
-REST_URL_STATIONS = REST_URL_PATH + "facilities"
-REST_URL_VARIABLES = REST_URL_PATH + "vocabulary/contentattribute"
-REST_URL_DOWNLOAD = REST_URL_PATH + "metadata/"
+REST_URL_PATH = PROD_API
+REST_URL_STATIONS = REST_URL_PATH + "/api/facilities"
+# restricted to In-Situ to keep parity of functionality with the old code: _read_dataset only parses EBAS netCDF
+# (requires 'ebas_component' attrs), so datasets from other ACTRIS DCs were never usable
+DVAS_REPOSITORY_ID = "In-Situ"
+# facilities with any ACTRIS National Facility labelling status other than this are treated as ACTRIS NF
+_NF_NOT_LABELLED = "not labelled"
 
 STATIC_PARAMETERS = ["latitude", "longitude", "air_pressure", "barometric_altitude", "pressure", "relative_humidity", "temperature"]
 
@@ -75,18 +80,20 @@ def get_list_platforms():
         all_facilities = []
 
         for facility in response.json():
-                
-                if facility.get('actris_national_facility') == True:
-                    all_facilities.append(
-                        {
-                            'short_name': facility['identifier'],
-                            'latitude': facility['lat'],
-                            'longitude': facility['lon'],
-                            'long_name': facility['name'],
-                            'URI': '{0}/facilities/{1}'.format(REST_URL_PATH, facility['identifier']),
-                            'altitude': facility['alt']})
-                else:
-                    pass
+            # missing, null or empty labelling status is treated as not labelled
+            if (facility.get('actris_national_facility') or _NF_NOT_LABELLED) == _NF_NOT_LABELLED:
+                continue
+            # GeoJSON order: [lon, lat, alt]; location may be missing
+            coords = (facility.get('location') or {}).get('coordinates') or []
+            coords = list(coords) + [None] * (3 - len(coords))
+            all_facilities.append(
+                {
+                    'short_name': facility['identifier'],
+                    'latitude': coords[1],
+                    'longitude': coords[0],
+                    'long_name': facility['name'],
+                    'URI': facility.get('uri', '{0}/facilities/{1}'.format(REST_URL_STATIONS, facility['identifier'])),
+                    'altitude': coords[2]})
 
         return all_facilities
 
@@ -106,56 +113,50 @@ def get_list_variables():
     - 'ECV_name'
     and associates a single ACTRIS variable with one or many ECV name(s)
     e.g. {'variable_name': 'nitrogen dioxide amount fraction', 'ECV_name': ['NO2']}
+    The DVAS API exposes no public vocabulary endpoint, so this is derived from the static mapping.
     :return: list of dict
     """
-    try:
-        response = requests.get(REST_URL_VARIABLES)
-        response.raise_for_status()
-        jsonResponse = response.json()
-        variables = []
-        for item in jsonResponse:
-            if item['label'] in MAPPING_ACTRIS_ECV:
-                variable = {
-                    'variable_name': item['label'],
-                    'ECV_name': MAPPING_ACTRIS_ECV[item['label']]
-                }
-                variables.append(variable)
-        return variables
-    
-    except HTTPError as http_err:
-        warnings.warn(f'HTTP error occurred: {http_err}')
-        raise
-    except Exception as err:
-        warnings.warn(f'Other error occurred: {err}')
-        raise
+    return [
+        {'variable_name': variable_name, 'ECV_name': ecv_names}
+        for variable_name, ecv_names in MAPPING_ACTRIS_ECV.items()
+    ]
 
 
 def _transform_dataset(dataset, variable):
     """
     Transforms ACTRIS dataset's metadata into ATMO-ACCESS-specific metadata. The latter includes 'ecv_variables',
-    which indicates which ECV are present in the dataset. If none of the ECV is present, this function returns None.
+    which indicates which ECV are present in the dataset. If none of the ECV is present, or the dataset is not openly
+    accessible via OPeNDAP/HTTP, this function returns None.
     :param dataset: dict
     :param variable: str with the name of an ACTRIS variable
     :return: dict or None
     """
-    title = dataset['md_identification']['title']
-    md_distribution_information = dataset['md_distribution_information']
-    dataset_urls = [
-        {'url': entry['dataset_url'], 'type': entry['protocol']}
-        for entry in md_distribution_information
+    title = dataset['identification']['title']
+    distribution_information = [
+        entry for entry in dataset['distribution_information']
         if entry['protocol'] in ['OPeNDAP', 'HTTP']
     ]
+    dataset_urls = [
+        {'url': entry['dataset_url'], 'type': entry['protocol']}
+        for entry in distribution_information
+        if not (entry.get('access_restriction') or {}).get('restricted', False)
+    ]
+    if not dataset_urls:
+        restrictions = {(entry.get('access_restriction') or {}).get('description') for entry in distribution_information}
+        logger.info(f'Skipping access-restricted ACTRIS dataset {dataset["identification"]["identifier"]["pid"]} '
+                    f'({title}); restriction: {restrictions}')
+        return None
     ecvs = MAPPING_ACTRIS_ECV.get(variable, [])
     ecvs_present = _read_dataset(dataset_urls, variables_list=ecvs, get_ECV_only=True)
     if not ecvs_present:
         return None
     time_period = [
-        pd.to_datetime(dataset['ex_temporal_extent']['time_period_begin'], utc=True),
-        pd.to_datetime(dataset['ex_temporal_extent']['time_period_end'], utc=True)
+        pd.to_datetime(dataset['temporal_extent']['time_period_begin'], utc=True),
+        pd.to_datetime(dataset['temporal_extent']['time_period_end'], utc=True)
     ]
-    platform_id = dataset['md_data_identification']['facility']['identifier']
+    platform_id = dataset['facility']['identifier']
     return {
-        '_id': dataset['id'],
+        '_id': dataset['identification']['identifier']['pid'],
         'title': title,
         'urls': dataset_urls,
         'ecv_variables': ecvs_present,
@@ -165,33 +166,24 @@ def _transform_dataset(dataset, variable):
 
 
 def _query_datasets_for_station_and_variable(code, variable):
-    page = 0
-    _all_datasets = []
-    while True:
-        try:
-            url = f"{REST_URL_PATH}/metadata/facility/{code}/content/{variable}/page/{page}"
-            response = requests.get(url)
-            response.raise_for_status()
-            datasets = response.json()
-
-            if not datasets:
-                break
-
-            _all_datasets.extend(datasets)
-            page += 1
-        except HTTPError as http_err:
-            warnings.warn(
-                f'HTTP error occurred while querying ACTRIS datasets for station={code}, page={page}: {http_err}')
-            #raise
-        except Exception as err:
-            warnings.warn(f'Other error occurred while querying ACTRIS datasets for station={code}, page={page}: {err}')
-            #raise
+    query = (
+        BoolQuery(size=100)
+        .filter(QueryField.FACILITY_IDENTIFIER, code)
+        .filter(QueryField.VARIABLE_NAME, variable)
+        .filter(QueryField.DATASET_REPOSITORY_ID, DVAS_REPOSITORY_ID)
+        .paginate([(QueryField.IDENTIFICATION_PID, SortType.ASC)])
+    )
+    try:
+        _all_datasets = list(search(PROD_API, query))
+    except httpx.HTTPError as http_err:
+        warnings.warn(f'HTTP error occurred while querying ACTRIS datasets for station={code}, variable={variable}: {http_err}')
+        _all_datasets = []
 
     all_datasets = []
     for _ds in _all_datasets:
         try:
             _id = 'unknown'
-            _id = _ds.get('id')
+            _id = _ds.get('identification', {}).get('identifier', {}).get('pid')
             ds = _transform_dataset(_ds, variable)
             if ds is not None:
                 all_datasets.append(ds)

@@ -13,5 +13,5 @@ if __name__ == '__main__':
     first_platform = platforms_df['short_name'].iloc[0]
     print(first_platform)
     # random_platform = platforms_df['short_name'].sample().iloc[0]
-    datasets = query_actris.query_datasets_stations([first_platform])
+    datasets = query_actris.query_datasets([first_platform])
     print(datasets)
