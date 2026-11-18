@@ -38,3 +38,7 @@ python -m pip install --editable .
 ```sh
 python atmoaccess_data_access/query_iagos.py
 ```
+
+## API specifications
+
+Each RI has to maintain a python script (see query_RI.py) with the same methods that allow to retrieve the list of variables and platforms, and search and read datasets.

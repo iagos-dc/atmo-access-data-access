@@ -170,6 +170,9 @@ def query_datasets(
     - 'time_period' (time period covered by the dataset)
     - 'platform_id' (id of the station, i.e. identical to `short_name` of the platform returned by method `get_list_platforms`)
     """
+    # if no station codes, no need to query the ICOS database and return empty list
+    if not codes:
+        return []
     # Keep only variables that are ECVs and list the corresponding ICOS data object specifications.
     selected_vars = _ECVS if variables_list is None else _ECVS.intersection(variables_list)
     specs: set[str] = set()
