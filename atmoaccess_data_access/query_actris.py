@@ -262,6 +262,22 @@ def query_datasets(codes, variables_list=None, temporal_extent=None):
     return filtered_datasets
 
 
+def _split_wavelength_dim(ds: xr.Dataset) -> xr.Dataset:
+    """Split each (d_Wavelength*, time) variable into time-only variables named <var>_<wl>nm."""
+    split_vars: dict[str, xr.DataArray] = {}
+    for varname, da in ds.data_vars.items():
+        wl_dims = [d for d in da.dims if d.startswith('d_Wavelength')]
+        if len(wl_dims) != 1 or set(da.dims) != {wl_dims[0], 'time'}:
+            continue
+        wl_dim = wl_dims[0]
+        wavelengths = ds[wl_dim].values if wl_dim in ds.variables else range(da.sizes[wl_dim])
+        for i, wl in enumerate(wavelengths):
+            da_wl = da.isel({wl_dim: i}, drop=True)
+            da_wl.attrs = {**da.attrs, 'wavelength': f'{float(wl):g} nm'}
+            split_vars[f'{varname}_{float(wl):g}nm'] = da_wl
+    return ds.assign(split_vars)
+
+
 def _read_dataset(dataset_id, variables_list=None, get_ECV_only=False):
     if variables_list is None:
         variables_list = list(MAPPING_ECV_ACTRIS)
@@ -279,8 +295,19 @@ def _read_dataset(dataset_id, variables_list=None, get_ECV_only=False):
         raise ValueError(f'invalid dataset_id; should be an url or a list of dict with keys "url" and "type"; got dataset_id={dataset_id}') from e
 
     def filter_ds_vars(ds):
+        # skip datasets without a time series; squeeze below would remove a size-1 'time' dimension
+        n_time = ds.sizes.get('time', 0)
+        if n_time <= 1:
+            warnings.warn(f'Skipping ACTRIS dataset {ds.attrs.get("doi", url_opendap or url_http)}: '
+                          f'it has {n_time} time step(s), so it is not a time series')
+            return None, []
+
         # remove all trivial, single-coordinate dimensions
         ds = ds.squeeze(drop=True)
+
+        # split variables with a wavelength dimension, e.g. AOD (d_Wavelength, time),
+        # into one time-only variable per wavelength, so they survive the drop below
+        ds = _split_wavelength_dim(ds)
 
         # remove all variables having dimension(s) other than 'time'
         dims_other_than_time = [d for d in ds.dims if d != 'time']
